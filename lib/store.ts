@@ -11,7 +11,11 @@ import {
   PlatformNotification,
   EscrowTransaction,
   WeightUnit,
+  LandAreaUnit,
   ListingCategory,
+  PaymentMethod,
+  CalculatorEstimate,
+  SavedCalculation,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -31,6 +35,9 @@ const STORAGE_KEYS = {
   SETTINGS: 'strawsync_settings',
   NOTIFICATIONS: 'strawsync_notifications',
   TRANSACTIONS: 'strawsync_transactions',
+  CALCULATOR_ESTIMATE: 'strawsync_calculator_estimate',
+  CALCULATOR_PREFILL: 'strawsync_calculator_prefill',
+  SAVED_CALCULATIONS: 'strawsync_saved_calculations',
 };
 
 const DEFAULT_SETTINGS: PlatformSettings = {
@@ -184,6 +191,30 @@ export function formatUnitPrice(pricePerUnit: number, unit: WeightUnit = 'tonne'
   const safe = Math.round(Number(pricePerUnit) || 0);
   const suffix = unit === 'tonne' ? 't' : unit;
   return `₹${safe.toLocaleString('en-IN')}/${suffix}`;
+}
+
+export const LAND_AREA_MULTIPLIERS_TO_ACRE: Record<LandAreaUnit, number> = {
+  acre: 1,
+  bigha: 0.625,
+  hectare: 2.47105,
+  kanal: 0.125,
+  guntha: 0.025,
+};
+
+export function toAcres(value: number, unit: LandAreaUnit = 'acre'): number {
+  const safe = Math.max(0, Number(value) || 0);
+  return Number((safe * (LAND_AREA_MULTIPLIERS_TO_ACRE[unit] ?? 1)).toFixed(5));
+}
+
+export function canBuyerPayOrder(order: PurchaseOrder): boolean {
+  if (order.paymentStatus === 'settled' || order.status === 'settled') return false;
+  return [
+    'logistics_assigned',
+    'pickup_en_route',
+    'loaded_and_weighed',
+    'in_transit',
+    'delivered',
+  ].includes(order.status);
 }
 
 function interpolateCoords(
@@ -555,6 +586,8 @@ export const StrawSyncStore = {
   addListing(data: {
     cropType: ResidueListing['cropType'];
     landAreaAcres?: number;
+    landAreaUnit?: LandAreaUnit;
+    originalLandArea?: number;
     expectedPricePerTonne?: number;
     directQuantity?: number;
     weightUnit?: WeightUnit;
@@ -577,7 +610,7 @@ export const StrawSyncStore = {
     const coeff = CROP_COEFFICIENTS[data.cropType] || CROP_COEFFICIENTS.paddy;
     const unit: WeightUnit = data.weightUnit || 'tonne';
     const acres = Math.max(0, Number(data.landAreaAcres || 0));
-    const estimates = estimateResidue(data.cropType, Math.max(1, acres || 10), data.baleType);
+    const estimates = estimateResidue(data.cropType, acres, data.baleType);
 
     const recoverableTonnes =
       data.directQuantity !== undefined && data.directQuantity > 0
@@ -618,6 +651,8 @@ export const StrawSyncStore = {
       cropName: data.customCropName?.trim() || coeff.cropName,
       category: data.category || coeff.category,
       landAreaAcres: acres,
+      landAreaUnit: data.landAreaUnit || 'acre',
+      originalLandArea: data.originalLandArea ?? acres,
       estimatedGrossTonnes:
         acres > 0 ? estimates.grossTonnes : Number((recoverableTonnes * 1.1).toFixed(2)),
       recoverableTonnes,
@@ -802,9 +837,9 @@ export const StrawSyncStore = {
           o.paymentStatus ||
           (o.status === 'settled'
             ? 'settled'
-            : o.status === 'delivered'
-              ? 'pending_release'
-              : 'escrow_funded'),
+            : o.status === 'requested' || o.status === 'accepted'
+              ? 'awaiting_logistics'
+              : 'pending_release'),
       };
     });
   },
@@ -816,7 +851,8 @@ export const StrawSyncStore = {
   createOrderFromMatch(
     match: MatchResult,
     customQuantityTonnes?: number,
-    displayMeta?: { weightUnit?: WeightUnit; displayQuantity?: number }
+    displayMeta?: { weightUnit?: WeightUnit; displayQuantity?: number },
+    escrowMeta?: { paymentMethod?: PaymentMethod; utrNumber?: string; paymentReference?: string }
   ): PurchaseOrder {
     const activeUser = this.getCurrentUser();
     const actingBuyer = activeUser?.role === 'buyer' ? activeUser : null;
@@ -834,6 +870,7 @@ export const StrawSyncStore = {
       match.demand.plantLocation.coordinates.lat,
       match.demand.plantLocation.coordinates.lng,
     ];
+    const nowIso = new Date().toISOString();
 
     const newOrder: PurchaseOrder = {
       id: `ord-${Date.now()}`,
@@ -878,7 +915,11 @@ export const StrawSyncStore = {
       distanceKm: match.distanceKm,
       vehicleType: match.recommendedVehicle.name,
       status: 'requested',
-      paymentStatus: 'escrow_funded',
+      paymentStatus: escrowMeta?.utrNumber ? 'escrow_funded' : 'awaiting_logistics',
+      paymentMethod: escrowMeta?.paymentMethod,
+      escrowPaymentReference: escrowMeta?.paymentReference,
+      utrNumber: escrowMeta?.utrNumber,
+      escrowFundedAt: escrowMeta?.utrNumber ? nowIso : undefined,
       trackingTimeline: [
         {
           step: 'Purchase Request Submitted by Buyer',
@@ -887,7 +928,9 @@ export const StrawSyncStore = {
             minute: '2-digit',
           }),
           completed: true,
-          notes: `Awaiting confirmation from ${match.listing.farmerName}.`,
+          notes: escrowMeta?.utrNumber
+            ? `Escrow funded via ${escrowMeta.paymentMethod} (UTR: ${escrowMeta.utrNumber}). Awaiting ${match.listing.farmerName}.`
+            : `Awaiting confirmation from ${match.listing.farmerName}.`,
         },
         {
           step: 'Farmer Confirmation & Vehicle Dispatch',
@@ -917,7 +960,7 @@ export const StrawSyncStore = {
         },
       ],
       co2SavedTonnes: co2Tonnes,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       estimatedDeliveryDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
     };
 
@@ -941,8 +984,12 @@ export const StrawSyncStore = {
 
     this.addNotification({
       userId: match.listing.farmerId,
-      title: `New Purchase Request #${newOrder.orderNumber}`,
-      message: `${newOrder.buyerName} requested ${formatWeight(displayQty, unit)} of ${match.listing.cropName} (₹${farmgateTotal.toLocaleString('en-IN')}).`,
+      title: escrowMeta?.utrNumber
+        ? `New Paid Escrow Request #${newOrder.orderNumber}`
+        : `New Purchase Request #${newOrder.orderNumber}`,
+      message: escrowMeta?.utrNumber
+        ? `New Paid Escrow Purchase Request received from ${newOrder.buyerName} for ${formatWeight(displayQty, unit)} of ${match.listing.cropName} (₹${farmgateTotal.toLocaleString('en-IN')} locked • ${escrowMeta.paymentMethod} • UTR ${escrowMeta.utrNumber}).`
+        : `${newOrder.buyerName} requested ${formatWeight(displayQty, unit)} of ${match.listing.cropName} (₹${farmgateTotal.toLocaleString('en-IN')}).`,
       type: 'order',
       orderId: newOrder.id,
     });
@@ -1316,7 +1363,7 @@ export const StrawSyncStore = {
       ];
       updatedOrder = {
         ...o,
-        status: 'delivered',
+        status: o.paymentStatus === 'settled' ? 'settled' : 'delivered',
         paymentStatus: o.paymentStatus === 'settled' ? 'settled' : 'pending_release',
         deliveredAt: nowIso,
         weighbridgeSlipId: slipId,
@@ -1366,7 +1413,8 @@ export const StrawSyncStore = {
   },
 
   confirmDeliveryAndReleasePayment(
-    orderId: string
+    orderId: string,
+    releaseMeta?: { paymentMethod?: PaymentMethod; utrNumber?: string; paymentReference?: string }
   ):
     | { success: true; order: PurchaseOrder; transaction: EscrowTransaction }
     | { success: false; error: string } {
@@ -1386,17 +1434,26 @@ export const StrawSyncStore = {
       };
     }
 
-    if (order.status === 'cancelled' || order.status === 'requested') {
+    if (order.status === 'settled' || order.paymentStatus === 'settled') {
       return {
         success: false,
-        error: 'Cannot settle an order that has not been dispatched or accepted.',
+        error: 'Escrow payment has already been settled for this order.',
+      };
+    }
+
+    if (!canBuyerPayOrder(order)) {
+      return {
+        success: false,
+        error:
+          'Escrow payment can only be initiated after Farmer approval and Logistics truck assignment.',
       };
     }
 
     const farmer = this.getAllUsers().find((u) => u.id === order.farmerId);
     const hasUpi = Boolean(farmer?.upiId);
     const hasBank = Boolean(farmer?.bankAccountNumber);
-    const paymentMethod: 'UPI' | 'IMPS/NEFT' = !hasUpi && hasBank ? 'IMPS/NEFT' : 'UPI';
+    const defaultMethod: PaymentMethod = !hasUpi && hasBank ? 'IMPS/NEFT' : 'UPI';
+    const paymentMethod: PaymentMethod = releaseMeta?.paymentMethod || defaultMethod;
     const payoutTarget = hasUpi
       ? farmer!.upiId!
       : hasBank
@@ -1410,7 +1467,7 @@ export const StrawSyncStore = {
       hour: '2-digit',
       minute: '2-digit',
     });
-    const utrNumber = `UTR${Date.now().toString().slice(-10)}`;
+    const utrNumber = releaseMeta?.utrNumber || `UTR${Date.now().toString().slice(-10)}`;
 
     let settledOrder: PurchaseOrder | null = null;
     const orders = this.getOrders().map((o) => {
@@ -1426,9 +1483,10 @@ export const StrawSyncStore = {
       }));
       settledOrder = {
         ...o,
-        status: 'settled',
+        status: o.status === 'delivered' ? 'settled' : o.status,
         paymentStatus: 'settled',
         paymentMethod,
+        escrowPaymentReference: releaseMeta?.paymentReference || o.escrowPaymentReference,
         settledPayoutTarget: payoutTarget,
         utrNumber,
         buyerConfirmedAt: nowIso,
@@ -1494,6 +1552,76 @@ export const StrawSyncStore = {
   getTransactions(farmerId?: string): EscrowTransaction[] {
     const all = getFromStorage<EscrowTransaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
     return farmerId ? all.filter((t) => t.farmerId === farmerId) : all;
+  },
+
+  // Calculator Estimates & One-Time Workflow Prefills
+  saveCalculatorEstimate(
+    estimate: Omit<CalculatorEstimate, 'createdAt'> | CalculatorEstimate
+  ): CalculatorEstimate {
+    const saved: CalculatorEstimate = {
+      ...estimate,
+      createdAt:
+        'createdAt' in estimate && estimate.createdAt
+          ? estimate.createdAt
+          : new Date().toISOString(),
+    };
+    setToStorage(STORAGE_KEYS.CALCULATOR_ESTIMATE, saved);
+    notifyListeners();
+    return saved;
+  },
+
+  getLatestCalculatorEstimate(): CalculatorEstimate | null {
+    return getFromStorage<CalculatorEstimate | null>(STORAGE_KEYS.CALCULATOR_ESTIMATE, null);
+  },
+
+  setCalculatorPrefill(
+    target: 'listing' | 'demand',
+    estimate: Omit<CalculatorEstimate, 'createdAt'> | CalculatorEstimate
+  ): CalculatorEstimate {
+    const saved = this.saveCalculatorEstimate(estimate);
+    setToStorage(STORAGE_KEYS.CALCULATOR_PREFILL, { target, estimate: saved });
+    notifyListeners();
+    return saved;
+  },
+
+  consumeCalculatorPrefill(target: 'listing' | 'demand'): CalculatorEstimate | null {
+    const payload = getFromStorage<{ target: 'listing' | 'demand'; estimate: CalculatorEstimate } | null>(
+      STORAGE_KEYS.CALCULATOR_PREFILL,
+      null
+    );
+    if (!payload || payload.target !== target) return null;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEYS.CALCULATOR_PREFILL);
+      } catch {
+        // ignore storage removal errors
+      }
+    }
+    return payload.estimate;
+  },
+
+  // Saved Calculations History
+  getSavedCalculations(): SavedCalculation[] {
+    return getFromStorage<SavedCalculation[]>(STORAGE_KEYS.SAVED_CALCULATIONS, []);
+  },
+
+  saveCalculation(entry: Omit<SavedCalculation, 'id' | 'createdAt'>): SavedCalculation {
+    const existing = this.getSavedCalculations();
+    const saved: SavedCalculation = {
+      ...entry,
+      id: `calc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: new Date().toISOString(),
+    };
+    const next = [saved, ...existing].slice(0, 50);
+    setToStorage(STORAGE_KEYS.SAVED_CALCULATIONS, next);
+    notifyListeners();
+    return saved;
+  },
+
+  deleteSavedCalculation(id: string): void {
+    const filtered = this.getSavedCalculations().filter((c) => c.id !== id);
+    setToStorage(STORAGE_KEYS.SAVED_CALCULATIONS, filtered);
+    notifyListeners();
   },
 
   // Notifications

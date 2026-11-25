@@ -195,7 +195,8 @@ export function estimateResidue(
   };
 } {
   const coeff = CROP_COEFFICIENTS[cropType] || CROP_COEFFICIENTS.paddy;
-  const grossTonnes = Number((landAreaAcres * coeff.residueRatioTonnesPerAcre).toFixed(1));
+  const safeAcres = Math.max(0, Number(landAreaAcres) || 0);
+  const grossTonnes = Number((safeAcres * coeff.residueRatioTonnesPerAcre).toFixed(1));
 
   // Bale type efficiency adjustments: baled retains more than loose/windblown residue
   let baleEfficiency = 1.0;

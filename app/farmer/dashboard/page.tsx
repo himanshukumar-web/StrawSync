@@ -25,6 +25,7 @@ import {
   UserProfile,
   PlatformNotification,
   EscrowTransaction,
+  CalculatorEstimate,
 } from '../../../types';
 import {
   StrawSyncStore,
@@ -39,6 +40,8 @@ export default function FarmerDashboardPage() {
   const [notifications, setNotifications] = useState<PlatformNotification[]>([]);
   const [transactions, setTransactions] = useState<EscrowTransaction[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [latestEstimate, setLatestEstimate] = useState<CalculatorEstimate | null>(null);
+  const [listingPrefill, setListingPrefill] = useState<CalculatorEstimate | null>(null);
   const [actionMsg, setActionMsg] = useState<string>('');
 
   const [upiId, setUpiId] = useState('');
@@ -54,6 +57,7 @@ export default function FarmerDashboardPage() {
       setCurrentUser(user);
       setListings(StrawSyncStore.getListings());
       setOrders(StrawSyncStore.getOrders());
+      setLatestEstimate(StrawSyncStore.getLatestCalculatorEstimate());
       setNotifications(user ? StrawSyncStore.getNotifications(user.id) : []);
       setTransactions(
         user?.role === 'admin'
@@ -182,13 +186,39 @@ export default function FarmerDashboardPage() {
           </div>
 
           <button
-            onClick={() => setShowAddModal(true)}
+            onClick={() => {
+              setListingPrefill(null);
+              setShowAddModal(true);
+            }}
             className="px-5 py-3 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold shadow-subtle flex items-center justify-center gap-2 transition shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>List New Residue Lot</span>
           </button>
         </div>
+
+        {latestEstimate && !isAdminView && (
+          <div className="p-4 rounded-2xl bg-forest-50/60 border border-forest-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="font-bold text-forest-900">
+                Latest Calculator Insight ({latestEstimate.cropType.toUpperCase()} • {latestEstimate.quantityTonnes}t @ ₹{latestEstimate.pricePerTonne.toLocaleString('en-IN')}/t):
+              </span>{' '}
+              <span className="text-forest-800">
+                Est. Payout ₹{latestEstimate.totalAmount.toLocaleString('en-IN')}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setListingPrefill(latestEstimate);
+                setShowAddModal(true);
+              }}
+              className="px-3.5 py-1.5 bg-forest hover:bg-forest-700 text-white rounded-xl font-bold shrink-0 transition"
+            >
+              Use in New Listing
+            </button>
+          </div>
+        )}
 
         {actionMsg && (
           <div className="p-4 rounded-2xl bg-emerald-50 border border-forest-200 text-xs font-bold text-forest-800 flex items-center justify-between shadow-subtle animate-fadeIn">
@@ -683,7 +713,11 @@ export default function FarmerDashboardPage() {
 
       <AddResidueModal
         isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        initialPrefill={listingPrefill}
+        onClose={() => {
+          setShowAddModal(false);
+          setListingPrefill(null);
+        }}
       />
     </DashboardLayout>
   );

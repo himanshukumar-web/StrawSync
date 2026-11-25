@@ -19,8 +19,19 @@ import {
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
 import AddDemandModal from '../../../components/AddDemandModal';
-import { ResidueListing, BuyerDemand, PurchaseOrder, MatchResult, UserProfile } from '../../../types';
-import { StrawSyncStore } from '../../../lib/store';
+import BuyerPaymentModal, {
+  BuyerPaymentCheckoutData,
+  BuyerPaymentReceipt,
+} from '../../../components/BuyerPaymentModal';
+import {
+  ResidueListing,
+  BuyerDemand,
+  PurchaseOrder,
+  MatchResult,
+  UserProfile,
+  CalculatorEstimate,
+} from '../../../types';
+import { StrawSyncStore, formatWeight, canBuyerPayOrder } from '../../../lib/store';
 import { findMatchesForDemand } from '../../../lib/engine';
 
 export default function BuyerDashboardPage() {
@@ -30,27 +41,30 @@ export default function BuyerDashboardPage() {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [selectedDemandId, setSelectedDemandId] = useState<string>('');
   const [showDemandModal, setShowDemandModal] = useState(false);
+  const [latestEstimate, setLatestEstimate] = useState<CalculatorEstimate | null>(null);
+  const [demandPrefill, setDemandPrefill] = useState<CalculatorEstimate | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<MatchResult | null>(null);
   const [orderSuccessMsg, setOrderSuccessMsg] = useState<string>('');
+  const [paymentModalState, setPaymentModalState] = useState<{
+    checkout: BuyerPaymentCheckoutData;
+    match?: MatchResult;
+    qty?: number;
+    releaseOrderId?: string;
+  } | null>(null);
 
   useEffect(() => {
-    setCurrentUser(StrawSyncStore.getCurrentUser());
-    setListings(StrawSyncStore.getListings());
-    const allDemands = StrawSyncStore.getDemands();
-    setDemands(allDemands);
-    setOrders(StrawSyncStore.getOrders());
-    if (allDemands.length > 0 && !selectedDemandId) {
-      setSelectedDemandId(allDemands[0].id);
-    }
-
-    const unsubscribe = StrawSyncStore.subscribe(() => {
+    const syncStore = () => {
       setCurrentUser(StrawSyncStore.getCurrentUser());
       setListings(StrawSyncStore.getListings());
       setDemands(StrawSyncStore.getDemands());
       setOrders(StrawSyncStore.getOrders());
-    });
+      setLatestEstimate(StrawSyncStore.getLatestCalculatorEstimate());
+    };
+
+    syncStore();
+    const unsubscribe = StrawSyncStore.subscribe(syncStore);
     return () => unsubscribe();
-  }, [selectedDemandId]);
+  }, []);
 
   const isAdminView = currentUser?.role === 'admin';
   const buyerDemands = isAdminView
@@ -67,18 +81,51 @@ export default function BuyerDashboardPage() {
     const qty = Math.min(match.listing.recoverableTonnes, 35);
     const newOrder = StrawSyncStore.createOrderFromMatch(match, qty);
     setOrderSuccessMsg(
-      `Purchase request #${newOrder.orderNumber} sent to ${match.listing.farmerName}! Awaiting farmer approval.`
+      `Purchase request #${newOrder.orderNumber} sent to ${match.listing.farmerName}! Payment will be enabled once Farmer accepts and Logistics truck is assigned.`
     );
     setSelectedMatch(null);
-    setTimeout(() => setOrderSuccessMsg(''), 5000);
+    setTimeout(() => setOrderSuccessMsg(''), 6000);
   };
 
-  const handleConfirmDeliveryAndRelease = (orderId: string) => {
-    const res = StrawSyncStore.confirmDeliveryAndReleasePayment(orderId);
+  const handleConfirmDeliveryAndRelease = (order: PurchaseOrder) => {
+    const farmer = StrawSyncStore.getAllUsers().find((u) => u.id === order.farmerId);
+    const payoutDest = farmer?.upiId
+      ? `UPI: ${farmer.upiId}`
+      : farmer?.bankAccountNumber
+        ? `A/C ${farmer.bankAccountNumber} (${farmer.ifscCode || 'IFSC'})`
+        : 'Verified Kisan Bank Escrow';
+    const logisticsSummary = `${order.logisticsPartnerName || 'Assigned Hauler'} • ${order.vehicleType}${order.vehicleNumber ? ` (${order.vehicleNumber})` : ''}`;
+
+    setPaymentModalState({
+      releaseOrderId: order.id,
+      checkout: {
+        mode: 'release_payout',
+        cropName: order.cropType.toUpperCase(),
+        farmerName: order.farmerName,
+        quantityLabel: formatWeight(order.displayQuantity ?? order.quantityTonnes, order.weightUnit),
+        deliveryDestination: order.deliveryLocation.facility,
+        logisticsSummary,
+        subtotalAmount: order.farmerTotalPayout,
+        logisticsAmount: order.logisticsTotalPayout,
+        totalAmount: order.buyerTotalBill,
+        weighbridgeSlipId: order.weighbridgeSlipId || undefined,
+        weighbridgeNetTonnes: order.weighbridgeNetTonnes || order.quantityTonnes,
+        payoutDestination: payoutDest,
+      },
+    });
+  };
+
+  const handleExecutePaymentModal = (receipt: BuyerPaymentReceipt) => {
+    if (!paymentModalState || !paymentModalState.releaseOrderId) return;
+    const res = StrawSyncStore.confirmDeliveryAndReleasePayment(
+      paymentModalState.releaseOrderId,
+      receipt
+    );
+    if (!res.success) {
+      throw new Error(res.error);
+    }
     setOrderSuccessMsg(
-      res.success
-        ? `Delivery confirmed for #${res.order.orderNumber}! ₹${res.transaction.amount.toLocaleString('en-IN')} paid to farmer (UTR: ${res.transaction.utrNumber}).`
-        : res.error
+      `Escrow settled for #${res.order.orderNumber}! ₹${res.transaction.amount.toLocaleString('en-IN')} credited to ${res.order.farmerName} (UTR: ${res.transaction.utrNumber}).`
     );
     setTimeout(() => setOrderSuccessMsg(''), 6000);
   };
@@ -155,6 +202,29 @@ export default function BuyerDashboardPage() {
             </div>
             <button onClick={() => setOrderSuccessMsg('')} className="text-forest hover:underline">
               Dismiss
+            </button>
+          </div>
+        )}
+
+        {latestEstimate && !isAdminView && (
+          <div className="p-4 rounded-2xl bg-blue-50/60 border border-blue-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="font-bold text-blue-900">
+                Latest Calculator Insight ({latestEstimate.cropType.toUpperCase()} • {latestEstimate.quantityTonnes}t @ ₹{latestEstimate.pricePerTonne.toLocaleString('en-IN')}/t):
+              </span>{' '}
+              <span className="text-blue-800">
+                Est. Total ₹{latestEstimate.totalAmount.toLocaleString('en-IN')}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDemandPrefill(latestEstimate);
+                setShowDemandModal(true);
+              }}
+              className="px-3.5 py-1.5 bg-blue-800 hover:bg-blue-900 text-white rounded-xl font-bold shrink-0 transition"
+            >
+              Create Demand from Estimate
             </button>
           </div>
         )}
@@ -399,12 +469,12 @@ export default function BuyerDashboardPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
-                    {o.status === 'delivered' && o.paymentStatus !== 'settled' && (
+                    {canBuyerPayOrder(o) && (
                       <button
-                        onClick={() => handleConfirmDeliveryAndRelease(o.id)}
+                        onClick={() => handleConfirmDeliveryAndRelease(o)}
                         className="px-3.5 py-2 bg-forest hover:bg-forest-700 text-white rounded-xl text-[11px] font-bold shadow-subtle transition"
                       >
-                        Confirm Delivery & Release Payment
+                        Pay &amp; Settle Escrow (₹{o.buyerTotalBill.toLocaleString('en-IN')})
                       </button>
                     )}
                     {o.paymentStatus === 'settled' && o.utrNumber && (
@@ -425,8 +495,19 @@ export default function BuyerDashboardPage() {
 
       <AddDemandModal
         isOpen={showDemandModal}
-        onClose={() => setShowDemandModal(false)}
+        initialPrefill={demandPrefill}
+        onClose={() => {
+          setShowDemandModal(false);
+          setDemandPrefill(null);
+        }}
         onSuccess={(created) => setSelectedDemandId(created.id)}
+      />
+
+      <BuyerPaymentModal
+        isOpen={!!paymentModalState}
+        checkout={paymentModalState?.checkout || null}
+        onClose={() => setPaymentModalState(null)}
+        onConfirmPayment={handleExecutePaymentModal}
       />
     </DashboardLayout>
   );

@@ -188,11 +188,17 @@ export default function FarmerOrdersPage() {
                       }`}>
                         {order.paymentStatus === 'settled'
                           ? 'Payment Settled'
-                          : order.status === 'delivered'
-                            ? 'Escrow Pending Release'
-                            : order.status === 'cancelled'
-                              ? 'Cancelled'
-                              : 'Escrow Locked'}
+                          : order.status === 'cancelled'
+                            ? 'Cancelled'
+                            : [
+                                  'logistics_assigned',
+                                  'pickup_en_route',
+                                  'loaded_and_weighed',
+                                  'in_transit',
+                                  'delivered',
+                                ].includes(order.status)
+                              ? 'Awaiting Buyer Payment'
+                              : 'Awaiting Truck Assignment'}
                       </span>
                       <button
                         type="button"

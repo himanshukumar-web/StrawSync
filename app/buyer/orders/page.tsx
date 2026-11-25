@@ -15,14 +15,22 @@ import {
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
 import LiveOrderGpsTracker from '../../../components/LiveOrderGpsTracker';
+import BuyerPaymentModal, {
+  BuyerPaymentCheckoutData,
+  BuyerPaymentReceipt,
+} from '../../../components/BuyerPaymentModal';
 import { PurchaseOrder, UserProfile } from '../../../types';
-import { StrawSyncStore, formatWeight } from '../../../lib/store';
+import { StrawSyncStore, formatWeight, canBuyerPayOrder } from '../../../lib/store';
 
 export default function BuyerOrdersPage() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [expandedGpsOrderId, setExpandedGpsOrderId] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState('');
+  const [releaseOrderModal, setReleaseOrderModal] = useState<{
+    order: PurchaseOrder;
+    checkout: BuyerPaymentCheckoutData;
+  } | null>(null);
 
   useEffect(() => {
     setCurrentUser(StrawSyncStore.getCurrentUser());
@@ -42,15 +50,50 @@ export default function BuyerOrdersPage() {
       ? orders.filter((o) => o.buyerId === currentUser.id)
       : [];
 
-  const handleConfirmDeliveryAndRelease = (orderId: string) => {
-    const res = StrawSyncStore.confirmDeliveryAndReleasePayment(orderId);
+  const handleConfirmDeliveryAndRelease = (order: PurchaseOrder) => {
+    const farmer = StrawSyncStore.getAllUsers().find((u) => u.id === order.farmerId);
+    const payoutDest = farmer?.upiId
+      ? `UPI: ${farmer.upiId}`
+      : farmer?.bankAccountNumber
+        ? `A/C ${farmer.bankAccountNumber} (${farmer.ifscCode || 'IFSC'})`
+        : 'Verified Kisan Bank Escrow';
+
+    const logisticsSummary = `${order.logisticsPartnerName || 'Assigned Hauler'} • ${order.vehicleType}${order.vehicleNumber ? ` (${order.vehicleNumber})` : ''}`;
+
+    setReleaseOrderModal({
+      order,
+      checkout: {
+        mode: 'release_payout',
+        cropName: order.cropType.toUpperCase(),
+        farmerName: order.farmerName,
+        quantityLabel: formatWeight(
+          order.displayQuantity ?? order.quantityTonnes,
+          order.weightUnit
+        ),
+        deliveryDestination: order.deliveryLocation.facility,
+        logisticsSummary,
+        subtotalAmount: order.farmerTotalPayout,
+        logisticsAmount: order.logisticsTotalPayout,
+        totalAmount: order.buyerTotalBill,
+        weighbridgeSlipId: order.weighbridgeSlipId || undefined,
+        weighbridgeNetTonnes: order.weighbridgeNetTonnes || order.quantityTonnes,
+        payoutDestination: payoutDest,
+      },
+    });
+  };
+
+  const handleConfirmReleaseInModal = (receipt: BuyerPaymentReceipt) => {
+    if (!releaseOrderModal) return;
+    const res = StrawSyncStore.confirmDeliveryAndReleasePayment(
+      releaseOrderModal.order.id,
+      receipt
+    );
     if (!res.success) {
-      setActionMsg(res.error);
-    } else {
-      setActionMsg(
-        `Delivery confirmed for #${res.order.orderNumber}! ₹${res.transaction.amount.toLocaleString('en-IN')} credited to ${res.order.farmerName} (${res.transaction.utrNumber}).`
-      );
+      throw new Error(res.error);
     }
+    setActionMsg(
+      `Delivery confirmed for #${res.order.orderNumber}! ₹${res.transaction.amount.toLocaleString('en-IN')} credited to ${res.order.farmerName} (${res.transaction.utrNumber}).`
+    );
     setTimeout(() => setActionMsg(''), 6000);
   };
 
@@ -153,14 +196,21 @@ export default function BuyerOrdersPage() {
                           {expandedGpsOrderId === order.id ? 'Hide GPS Map' : 'Track Live GPS'} ({order.gpsProgressPercent ?? 0}%)
                         </span>
                       </button>
-                      {order.status === 'delivered' && order.paymentStatus !== 'settled' && (
+                      {canBuyerPayOrder(order) && (
                         <button
-                          onClick={() => handleConfirmDeliveryAndRelease(order.id)}
+                          onClick={() => handleConfirmDeliveryAndRelease(order)}
                           className="px-4 py-2 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold shadow-subtle transition inline-flex items-center gap-1.5"
                         >
                           <ShieldCheck className="w-4 h-4" />
-                          <span>Confirm Delivery &amp; Release Payment</span>
+                          <span>
+                            Pay &amp; Settle Escrow (₹{order.buyerTotalBill.toLocaleString('en-IN')})
+                          </span>
                         </button>
+                      )}
+                      {order.status === 'accepted' && order.paymentStatus !== 'settled' && (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-800">
+                          Accepted • Awaiting Logistics Assignment
+                        </span>
                       )}
                       {order.paymentStatus === 'settled' && order.utrNumber && (
                         <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-forest-200 text-[10px] font-bold text-forest">
@@ -216,6 +266,13 @@ export default function BuyerOrdersPage() {
           </div>
         )}
       </div>
+
+      <BuyerPaymentModal
+        isOpen={!!releaseOrderModal}
+        checkout={releaseOrderModal?.checkout || null}
+        onClose={() => setReleaseOrderModal(null)}
+        onConfirmPayment={handleConfirmReleaseInModal}
+      />
     </DashboardLayout>
   );
 }

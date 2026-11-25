@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   Wheat,
   Plus,
@@ -16,29 +17,40 @@ import {
 import DashboardLayout from '../../../components/DashboardLayout';
 import AddResidueModal from '../../../components/AddResidueModal';
 import EditResidueModal from '../../../components/EditResidueModal';
-import { ResidueListing, UserProfile } from '../../../types';
+import { ResidueListing, UserProfile, CalculatorEstimate } from '../../../types';
 import {
   StrawSyncStore,
   formatWeight,
   formatUnitPrice,
 } from '../../../lib/store';
 
-export default function FarmerListingsPage() {
+function FarmerListingsContent() {
+  const searchParams = useSearchParams();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [calculatorPrefill, setCalculatorPrefill] = useState<CalculatorEstimate | null>(null);
   const [editingListing, setEditingListing] = useState<ResidueListing | null>(null);
 
   useEffect(() => {
-    setCurrentUser(StrawSyncStore.getCurrentUser());
-    setListings(StrawSyncStore.getListings());
-    const unsubscribe = StrawSyncStore.subscribe(() => {
+    const syncStore = () => {
       setCurrentUser(StrawSyncStore.getCurrentUser());
       setListings(StrawSyncStore.getListings());
-    });
+
+      if (searchParams.get('fromCalculator') === '1') {
+        const prefill = StrawSyncStore.consumeCalculatorPrefill('listing');
+        if (prefill) {
+          setCalculatorPrefill(prefill);
+          setShowAddModal(true);
+        }
+      }
+    };
+
+    syncStore();
+    const unsubscribe = StrawSyncStore.subscribe(syncStore);
     return () => unsubscribe();
-  }, []);
+  }, [searchParams]);
 
   const isAdminView = currentUser?.role === 'admin';
   const scopedListings = isAdminView
@@ -261,7 +273,11 @@ export default function FarmerListingsPage() {
 
       <AddResidueModal
         isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        initialPrefill={calculatorPrefill}
+        onClose={() => {
+          setShowAddModal(false);
+          setCalculatorPrefill(null);
+        }}
       />
 
       <EditResidueModal
@@ -270,5 +286,19 @@ export default function FarmerListingsPage() {
         onClose={() => setEditingListing(null)}
       />
     </DashboardLayout>
+  );
+}
+
+export default function FarmerListingsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[60vh] flex items-center justify-center text-xs font-semibold text-charcoal-muted">
+          Loading Farmer Listings...
+        </div>
+      }
+    >
+      <FarmerListingsContent />
+    </Suspense>
   );
 }

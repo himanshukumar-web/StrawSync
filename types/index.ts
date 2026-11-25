@@ -16,6 +16,8 @@ export type ListingCategory = 'crop_residue' | 'vegetables' | 'fruits' | 'agri_w
 
 export type WeightUnit = 'kg' | 'quintal' | 'tonne';
 
+export type LandAreaUnit = 'acre' | 'bigha' | 'hectare' | 'kanal' | 'guntha';
+
 export type ListingStatus = 'pending' | 'verified' | 'matched' | 'sold';
 
 export type BaleType = 'baled' | 'loose' | 'chopped';
@@ -39,6 +41,8 @@ export interface ResidueListing {
   landAreaAcres: number;
   estimatedGrossTonnes: number;
   recoverableTonnes: number;
+  landAreaUnit?: LandAreaUnit;
+  originalLandArea?: number;
   originalQuantity?: number;
   weightUnit?: WeightUnit;
   pricePerUnit?: number;
@@ -134,6 +138,50 @@ export interface TrackingStep {
   notes?: string;
 }
 
+export type PaymentMethod = 'UPI' | 'NetBanking' | 'NEFT/RTGS' | 'IMPS/NEFT';
+
+export interface CalculatorEstimate {
+  mode: 'farmer' | 'buyer';
+  cropType: CropType;
+  acres?: number;
+  landAreaUnit?: LandAreaUnit;
+  originalLandArea?: number;
+  baleType?: BaleType;
+  moisturePercent?: number;
+  quantityTonnes: number;
+  weightUnit: WeightUnit;
+  pricePerUnit: number;
+  pricePerTonne: number;
+  distanceKm?: number;
+  freightTotal?: number;
+  totalAmount: number;
+  co2SavedTonnes?: number;
+  createdAt: string;
+}
+
+export interface SavedCalculation {
+  id: string;
+  mode: 'farmer' | 'buyer';
+  cropType: CropType;
+  cropName: string;
+  landAreaValue?: number;
+  landAreaUnit?: LandAreaUnit;
+  landAreaAcres?: number;
+  baleType?: BaleType;
+  moisturePercent?: number;
+  quantityValue: number;
+  weightUnit: WeightUnit;
+  quantityTonnes: number;
+  pricePerUnit: number;
+  pricePerTonne: number;
+  distanceKm?: number;
+  freightTotal?: number;
+  materialTotal?: number;
+  estimatedValue: number;
+  co2SavedTonnes?: number;
+  createdAt: string;
+}
+
 export interface PurchaseOrder {
   id: string;
   orderNumber: string;
@@ -180,8 +228,10 @@ export interface PurchaseOrder {
   vehicleNumber?: string;
   driverName?: string;
   status: OrderStatus;
-  paymentStatus?: 'escrow_funded' | 'pending_release' | 'settled';
-  paymentMethod?: 'UPI' | 'IMPS/NEFT';
+  paymentStatus?: 'unpaid' | 'awaiting_logistics' | 'escrow_funded' | 'pending_release' | 'settled';
+  paymentMethod?: PaymentMethod;
+  escrowPaymentReference?: string;
+  escrowFundedAt?: string;
   settledPayoutTarget?: string;
   utrNumber?: string;
   settledAt?: string;
@@ -209,7 +259,7 @@ export interface EscrowTransaction {
   farmerId: string;
   farmerName: string;
   amount: number;
-  paymentMethod: 'UPI' | 'IMPS/NEFT';
+  paymentMethod: PaymentMethod;
   payoutDestination: string;
   utrNumber: string;
   status: 'settled';

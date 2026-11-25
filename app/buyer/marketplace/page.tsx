@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Search,
   MapPin,
@@ -9,9 +10,18 @@ import {
   ArrowLeft,
   CheckCircle2,
   Wheat,
+  Plus,
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
-import { ResidueListing, BuyerDemand, UserProfile, WeightUnit } from '../../../types';
+import AddDemandModal from '../../../components/AddDemandModal';
+import {
+  ResidueListing,
+  BuyerDemand,
+  UserProfile,
+  WeightUnit,
+  MatchResult,
+  CalculatorEstimate,
+} from '../../../types';
 import {
   StrawSyncStore,
   formatWeight,
@@ -19,8 +29,16 @@ import {
   fromTonnes,
   toTonnes,
 } from '../../../lib/store';
+import {
+  calculateRoadDistanceKm,
+  recommendVehicle,
+  calculateDeliveredCost,
+  CROP_COEFFICIENTS,
+} from '../../../lib/engine';
 
-export default function BuyerMarketplacePage() {
+function BuyerMarketplaceContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [demands, setDemands] = useState<BuyerDemand[]>([]);
@@ -31,29 +49,39 @@ export default function BuyerMarketplacePage() {
   const [requestQtyMap, setRequestQtyMap] = useState<Record<string, string>>({});
   const [successMsg, setSuccessMsg] = useState('');
 
-  useEffect(() => {
-    setCurrentUser(StrawSyncStore.getCurrentUser());
-    setListings(StrawSyncStore.getListings());
-    setDemands(StrawSyncStore.getDemands());
+  const [showDemandModal, setShowDemandModal] = useState(false);
+  const [demandPrefill, setDemandPrefill] = useState<CalculatorEstimate | null>(null);
 
-    const unsubscribe = StrawSyncStore.subscribe(() => {
+  useEffect(() => {
+    const syncStore = () => {
       setCurrentUser(StrawSyncStore.getCurrentUser());
       setListings(StrawSyncStore.getListings());
       setDemands(StrawSyncStore.getDemands());
-    });
-    return () => unsubscribe();
-  }, []);
 
-  const getSelectedQty = (listing: ResidueListing): { rawQty: number; unit: WeightUnit; tonnes: number } => {
+      if (searchParams.get('fromCalculator') === '1') {
+        const prefill = StrawSyncStore.consumeCalculatorPrefill('demand');
+        if (prefill) {
+          setDemandPrefill(prefill);
+          setShowDemandModal(true);
+        }
+      }
+    };
+
+    syncStore();
+    const unsubscribe = StrawSyncStore.subscribe(syncStore);
+    return () => unsubscribe();
+  }, [searchParams]);
+
+  const getSelectedQty = (
+    listing: ResidueListing
+  ): { rawQty: number; unit: WeightUnit; tonnes: number } => {
     const unit: WeightUnit = listing.weightUnit || 'tonne';
     const availableInUnit =
       listing.originalQuantity !== undefined
         ? listing.originalQuantity
         : fromTonnes(listing.recoverableTonnes, unit);
     const defaultRaw =
-      unit === 'tonne'
-        ? Math.min(availableInUnit, 30)
-        : availableInUnit;
+      unit === 'tonne' ? Math.min(availableInUnit, 30) : availableInUnit;
 
     const typed = requestQtyMap[listing.id];
     const parsed = typed !== undefined && typed !== '' ? Number(typed) : defaultRaw;
@@ -68,7 +96,7 @@ export default function BuyerMarketplacePage() {
     return { rawQty: clampedRaw, unit, tonnes };
   };
 
-  const handleRequestLot = (listing: ResidueListing) => {
+  const handleOpenEscrowCheckout = (listing: ResidueListing) => {
     if (listing.recoverableTonnes <= 0) return;
 
     const { rawQty, unit, tonnes } = getSelectedQty(listing);
@@ -83,53 +111,65 @@ export default function BuyerMarketplacePage() {
         currentUser?.name ||
         'GreenSource Bio-Energy Pellets Pvt Ltd',
       plantLocation: {
+        address: currentUser?.location || 'Industrial Plant Gate',
         district: currentUser?.location?.split(',')[0]?.trim() || 'Panipat',
         state: 'Haryana',
         coordinates: currentUser?.coordinates || { lat: 29.3909, lng: 76.9635 },
       },
-      maxDeliveredPricePerTonne: 2400,
+      maxDeliveredPricePerTonne: Math.max(listing.expectedPricePerTonne + 800, 2400),
+    };
+
+    const distanceKm = calculateRoadDistanceKm(
+      listing.coordinates,
+      activeDemand.plantLocation.coordinates
+    );
+    const vehicle = recommendVehicle(tonnes, distanceKm);
+    const safeQty = Math.max(0.01, tonnes);
+    const cost = calculateDeliveredCost(
+      listing.expectedPricePerTonne,
+      safeQty,
+      distanceKm,
+      vehicle
+    );
+    const farmgateSubtotal = Math.round(tonnes * listing.expectedPricePerTonne);
+    const freightSubtotal = Math.round(tonnes * cost.freightPerTonne);
+    const coeff = CROP_COEFFICIENTS[listing.cropType] || CROP_COEFFICIENTS.paddy;
+
+    const match: MatchResult = {
+      id: `direct-${listing.id}`,
+      listingId: listing.id,
+      demandId: activeDemand.id,
+      listing,
+      demand: activeDemand as BuyerDemand,
+      matchScore: 88,
+      distanceKm,
+      recommendedVehicle: vehicle,
+      estimatedFreightPerTonne: cost.freightPerTonne,
+      farmgatePricePerTonne: listing.expectedPricePerTonne,
+      estimatedDeliveredPricePerTonne: cost.deliveredPricePerTonne,
+      buyerMarginPerTonne: activeDemand.maxDeliveredPricePerTonne - cost.deliveredPricePerTonne,
+      totalDeliveredCost: farmgateSubtotal + freightSubtotal,
+      breakdown: {
+        distanceScore: 26,
+        quantityScore: 22,
+        priceViabilityScore: 22,
+        qualityScore: 18,
+        totalScore: 88,
+        reasons: ['Direct marketplace escrow order'],
+      },
+      co2SavedKg: Math.round(tonnes * coeff.co2AbatementTonnesPerTonne * 1000),
     };
 
     const newOrder = StrawSyncStore.createOrderFromMatch(
-      {
-        id: `direct-${listing.id}`,
-        listingId: listing.id,
-        demandId: activeDemand.id,
-        listing,
-        demand: activeDemand as BuyerDemand,
-        matchScore: 88,
-        distanceKm: 54,
-        recommendedVehicle: {
-          type: 'tata_heavy',
-          name: 'Tata 22ft 6-Wheeler Heavy Rig',
-          capacityTonnes: 15,
-          ratePerKm: 48,
-          baseLoadingCharge: 2000,
-          co2PerKmKg: 0.95,
-        },
-        estimatedFreightPerTonne: 420,
-        farmgatePricePerTonne: listing.expectedPricePerTonne,
-        estimatedDeliveredPricePerTonne: listing.expectedPricePerTonne + 420,
-        buyerMarginPerTonne: 200,
-        totalDeliveredCost: (listing.expectedPricePerTonne + 420) * tonnes,
-        breakdown: {
-          distanceScore: 26,
-          quantityScore: 22,
-          priceViabilityScore: 22,
-          qualityScore: 18,
-          totalScore: 88,
-          reasons: ['Direct marketplace order'],
-        },
-        co2SavedKg: Math.round(tonnes * 1400),
-      },
+      match,
       tonnes,
       { weightUnit: unit, displayQuantity: rawQty }
     );
 
     setSuccessMsg(
-      `Purchase request #${newOrder.orderNumber} (${formatWeight(rawQty, unit)}) sent to ${listing.farmerName}! Awaiting farmer approval.`
+      `Purchase request #${newOrder.orderNumber} (${formatWeight(rawQty, unit)}) sent to ${listing.farmerName}! Payment will be enabled once Farmer accepts and Logistics truck is assigned.`
     );
-    setTimeout(() => setSuccessMsg(''), 5000);
+    setTimeout(() => setSuccessMsg(''), 6000);
   };
 
   const filteredListings = listings.filter((l) => {
@@ -165,29 +205,42 @@ export default function BuyerMarketplacePage() {
               Browse Open Market Residue &amp; Fresh Farm Produce
             </h1>
             <p className="text-xs text-charcoal-muted">
-              Live verified farmgate listings across Punjab, Haryana, UP &amp; Rajasthan
+              Live verified farmgate listings with escrow-backed procurement
             </p>
           </div>
 
-          <div className="relative min-w-[280px]">
-            <Search className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
-            <input
-              type="text"
-              placeholder="Search by farmer, district, produce..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
-            />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative min-w-[240px]">
+              <Search className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
+              <input
+                type="text"
+                placeholder="Search by farmer, district, produce..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDemandPrefill(null);
+                setShowDemandModal(true);
+              }}
+              className="px-4 py-2 bg-blue-800 hover:bg-blue-900 text-white rounded-xl text-xs font-bold shadow-subtle flex items-center gap-1.5 transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Post Demand</span>
+            </button>
           </div>
         </div>
 
         {successMsg && (
           <div className="p-4 rounded-2xl bg-emerald-50 border border-forest-200 text-xs font-bold text-forest-800 flex items-center justify-between shadow-subtle">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-forest" />
+              <CheckCircle2 className="w-5 h-5 text-forest shrink-0" />
               <span>{successMsg}</span>
             </div>
-            <button onClick={() => setSuccessMsg('')} className="text-forest hover:underline">
+            <button onClick={() => setSuccessMsg('')} className="text-forest hover:underline shrink-0">
               Dismiss
             </button>
           </div>
@@ -214,7 +267,7 @@ export default function BuyerMarketplacePage() {
                 <option value="maize">Maize Stover &amp; Cobs</option>
                 <option value="agri_waste">Organic Agri-Waste</option>
               </optgroup>
-              <optgroup label="Fresh Vegetables &amp; Fruits">
+              <optgroup label="Fresh Vegetables & Fruits">
                 <option value="vegetables">Fresh Vegetables Lot</option>
                 <option value="fruits">Seasonal Fruits Lot</option>
                 <option value="orchard">Orchard Produce</option>
@@ -313,7 +366,9 @@ export default function BuyerMarketplacePage() {
                     <p className="text-xs text-charcoal-muted flex items-center gap-1 mt-0.5">
                       <MapPin className="w-3.5 h-3.5 text-forest" />
                       <span>
-                        {listing.village}, {listing.district} ({listing.state})
+                        {listing.village ? `${listing.village}, ` : ''}
+                        {listing.district}
+                        {listing.state ? ` (${listing.state})` : ''}
                       </span>
                     </p>
                   </div>
@@ -372,11 +427,11 @@ export default function BuyerMarketplacePage() {
                       Ready: {listing.collectionStartDate}
                     </span>
                     <button
-                      onClick={() => handleRequestLot(listing)}
+                      onClick={() => handleOpenEscrowCheckout(listing)}
                       disabled={listing.recoverableTonnes <= 0 || listing.status === 'sold'}
                       className="px-4 py-2 bg-blue-800 hover:bg-blue-900 disabled:bg-charcoal-muted/40 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
                     >
-                      <span>Request Purchase</span>
+                      <span>Send Purchase Request</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -386,6 +441,35 @@ export default function BuyerMarketplacePage() {
           })}
         </div>
       </div>
+
+      <AddDemandModal
+        isOpen={showDemandModal}
+        initialPrefill={demandPrefill}
+        onClose={() => {
+          setShowDemandModal(false);
+          setDemandPrefill(null);
+        }}
+        onSuccess={(created) => {
+          setSuccessMsg(
+            `Buyer procurement demand created for ${created.requiredTonnes}t ${created.cropType.toUpperCase()} (max ₹${created.maxDeliveredPricePerTonne}/t)!`
+          );
+          setTimeout(() => setSuccessMsg(''), 5500);
+        }}
+      />
     </DashboardLayout>
+  );
+}
+
+export default function BuyerMarketplacePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[60vh] flex items-center justify-center text-xs font-semibold text-charcoal-muted">
+          Loading Marketplace...
+        </div>
+      }
+    >
+      <BuyerMarketplaceContent />
+    </Suspense>
   );
 }

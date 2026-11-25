@@ -149,9 +149,8 @@ export default function DashboardLayout({ role, title, subtitle, children }: Pro
 
       {/* Sidebar Navigation */}
       <aside
-        className={`w-64 bg-white border-r border-earth-border shrink-0 flex flex-col justify-between p-5 md:static fixed inset-y-0 left-0 z-40 transform transition-transform duration-200 ease-in-out ${
-          mobileSidebarOpen ? 'translate-x-0 shadow-elevated' : '-translate-x-full md:translate-x-0'
-        }`}
+        className={`w-64 bg-white border-r border-earth-border shrink-0 flex flex-col justify-between p-5 md:static fixed inset-y-0 left-0 z-40 transform transition-transform duration-200 ease-in-out ${mobileSidebarOpen ? 'translate-x-0 shadow-elevated' : '-translate-x-full md:translate-x-0'
+          }`}
       >
         <div className="space-y-6">
           {/* Brand & Portal Header */}
@@ -192,11 +191,10 @@ export default function DashboardLayout({ role, title, subtitle, children }: Pro
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileSidebarOpen(false)}
-                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition ${
-                    isActive
-                      ? 'bg-forest text-white shadow-subtle'
-                      : 'text-charcoal hover:bg-sand hover:text-forest'
-                  }`}
+                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition ${isActive
+                    ? 'bg-forest text-white shadow-subtle'
+                    : 'text-charcoal hover:bg-sand hover:text-forest'
+                    }`}
                 >
                   <div className="flex items-center gap-2.5">
                     <ItemIcon className="w-4 h-4" />

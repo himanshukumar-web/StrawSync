@@ -2,19 +2,28 @@
 
 import React, { useRef, useState } from 'react';
 import { ImagePlus, Sparkles, Trash2, AlertCircle } from 'lucide-react';
-import { BaleType, CropType, ResidueListing, WeightUnit } from '../types';
+import {
+  BaleType,
+  CalculatorEstimate,
+  CropType,
+  LandAreaUnit,
+  ResidueListing,
+  WeightUnit,
+} from '../types';
 import { CROP_COEFFICIENTS, estimateResidue } from '../lib/engine';
-import { fromTonnes, pricePerUnitToPerTonne, toTonnes } from '../lib/store';
+import { fromTonnes, pricePerUnitToPerTonne, toAcres, toTonnes } from '../lib/store';
 import { compressProductImage } from '../lib/imageUpload';
+import LandAreaField from './LandAreaField';
 
 export interface ResidueFormState {
   cropType: CropType;
   customCropName: string;
-  quantity: number;
+  quantity: number | '';
   weightUnit: WeightUnit;
-  landAreaAcres: number;
+  landAreaInput: string;
+  landAreaUnit: LandAreaUnit;
   baleType: BaleType;
-  pricePerUnit: number;
+  pricePerUnit: number | '';
   moisture: number;
   imageUrl: string;
 }
@@ -31,7 +40,10 @@ const UNIT_SHORT: Record<WeightUnit, string> = {
   tonne: 'Tonne',
 };
 
-export function createInitialResidueState(listing?: ResidueListing | null): ResidueFormState {
+export function createInitialResidueState(
+  listing?: ResidueListing | null,
+  prefill?: Partial<CalculatorEstimate> | null
+): ResidueFormState {
   if (listing) {
     const unit: WeightUnit = listing.weightUnit || 'tonne';
     const quantity =
@@ -44,6 +56,11 @@ export function createInitialResidueState(listing?: ResidueListing | null): Resi
         ? listing.pricePerUnit
         : Math.round((listing.expectedPricePerTonne || 0) * factor * 100) / 100;
     const defaultName = CROP_COEFFICIENTS[listing.cropType]?.cropName || '';
+    const landUnit: LandAreaUnit = listing.landAreaUnit || 'acre';
+    const landValue =
+      listing.originalLandArea !== undefined
+        ? String(listing.originalLandArea)
+        : String(listing.landAreaAcres ?? 0);
 
     return {
       cropType: listing.cropType,
@@ -51,7 +68,8 @@ export function createInitialResidueState(listing?: ResidueListing | null): Resi
         listing.cropName && listing.cropName !== defaultName ? listing.cropName : '',
       quantity,
       weightUnit: unit,
-      landAreaAcres: listing.landAreaAcres ?? 0,
+      landAreaInput: landValue,
+      landAreaUnit: landUnit,
       baleType: listing.baleType,
       pricePerUnit,
       moisture: listing.moisturePercentage,
@@ -59,16 +77,53 @@ export function createInitialResidueState(listing?: ResidueListing | null): Resi
     };
   }
 
-  const defaultEst = estimateResidue('paddy', 20, 'baled');
+  if (prefill) {
+    const crop = prefill.cropType || 'paddy';
+    const unit: WeightUnit = prefill.weightUnit || 'tonne';
+    const coeff = CROP_COEFFICIENTS[crop] || CROP_COEFFICIENTS.paddy;
+    const qty =
+      prefill.quantityTonnes !== undefined && prefill.quantityTonnes > 0
+        ? fromTonnes(prefill.quantityTonnes, unit)
+        : '';
+    const factor = unit === 'kg' ? 0.001 : unit === 'quintal' ? 0.1 : 1;
+    const unitPrice =
+      prefill.pricePerUnit && prefill.pricePerUnit > 0
+        ? prefill.pricePerUnit
+        : prefill.pricePerTonne && prefill.pricePerTonne > 0
+          ? Math.round(prefill.pricePerTonne * factor * 100) / 100
+          : '';
+    const landUnit: LandAreaUnit = prefill.landAreaUnit || 'acre';
+    const landInput =
+      prefill.originalLandArea !== undefined
+        ? String(prefill.originalLandArea)
+        : prefill.acres !== undefined
+          ? String(prefill.acres)
+          : '';
+
+    return {
+      cropType: crop,
+      customCropName: '',
+      quantity: qty,
+      weightUnit: unit,
+      landAreaInput: landInput,
+      landAreaUnit: landUnit,
+      baleType: prefill.baleType || 'baled',
+      pricePerUnit: unitPrice,
+      moisture: prefill.moisturePercent ?? coeff.typicalMoisturePercent,
+      imageUrl: '',
+    };
+  }
+
   return {
     cropType: 'paddy',
     customCropName: '',
-    quantity: defaultEst.recoverableTonnes,
+    quantity: '',
     weightUnit: 'tonne',
-    landAreaAcres: 20,
+    landAreaInput: '',
+    landAreaUnit: 'acre',
     baleType: 'baled',
-    pricePerUnit: 1700,
-    moisture: 13.5,
+    pricePerUnit: '',
+    moisture: CROP_COEFFICIENTS.paddy.typicalMoisturePercent,
     imageUrl: '',
   };
 }
@@ -85,9 +140,16 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
   const [uploadError, setUploadError] = useState('');
 
   const coeff = CROP_COEFFICIENTS[value.cropType] || CROP_COEFFICIENTS.paddy;
-  const normalizedTonnes = toTonnes(value.quantity || 0, value.weightUnit);
-  const normalizedPerTonne = pricePerUnitToPerTonne(value.pricePerUnit || 0, value.weightUnit);
-  const estimatedPayout = Math.round(normalizedTonnes * normalizedPerTonne);
+  const qtyNum = Number(value.quantity) || 0;
+  const priceNum = Number(value.pricePerUnit) || 0;
+  const normalizedTonnes = toTonnes(qtyNum, value.weightUnit);
+  const normalizedPerTonne = pricePerUnitToPerTonne(priceNum, value.weightUnit);
+  const estimatedPayout = Math.round(qtyNum * priceNum);
+
+  const normalizedWeightText =
+    normalizedTonnes === 0
+      ? '0'
+      : normalizedTonnes.toFixed(Math.round(normalizedTonnes * 1000) % 10 !== 0 ? 3 : 2);
 
   const handleCropChange = (nextCrop: CropType) => {
     const nextCoeff = CROP_COEFFICIENTS[nextCrop];
@@ -100,26 +162,11 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
     const isFreshNext = nextCoeff.category === 'vegetables' || nextCoeff.category === 'fruits';
     const wasFreshPrev = prevCat === 'vegetables' || prevCat === 'fruits';
 
-    if (!isEdit && isFreshNext !== wasFreshPrev) {
-      if (isFreshNext) {
-        onChange({
-          ...value,
-          cropType: nextCrop,
-          weightUnit: 'kg',
-          quantity: value.weightUnit === 'kg' ? value.quantity : 500,
-          pricePerUnit: Math.round(nextCoeff.marketBaseRateMin / 1000) || 20,
-          moisture: nextCoeff.typicalMoisturePercent,
-        });
-        return;
-      }
-
-      const est = estimateResidue(nextCrop, Math.max(1, value.landAreaAcres || 20), value.baleType);
+    if (!isEdit && isFreshNext !== wasFreshPrev && value.quantity === '' && value.pricePerUnit === '') {
       onChange({
         ...value,
         cropType: nextCrop,
-        weightUnit: 'tonne',
-        quantity: est.recoverableTonnes,
-        pricePerUnit: Math.round((nextCoeff.marketBaseRateMin + nextCoeff.marketBaseRateMax) / 2),
+        weightUnit: isFreshNext ? 'kg' : 'tonne',
         moisture: nextCoeff.typicalMoisturePercent,
       });
       return;
@@ -134,20 +181,29 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
 
   const handleUnitChange = (nextUnit: WeightUnit) => {
     if (nextUnit === value.weightUnit) return;
-    const tonnes = toTonnes(value.quantity || 0, value.weightUnit);
-    const perTonne = pricePerUnitToPerTonne(value.pricePerUnit || 0, value.weightUnit);
-    const factor = nextUnit === 'kg' ? 0.001 : nextUnit === 'quintal' ? 0.1 : 1;
-    onChange({
-      ...value,
-      weightUnit: nextUnit,
-      quantity: fromTonnes(tonnes, nextUnit),
-      pricePerUnit: Math.max(0, Number((perTonne * factor).toFixed(2))),
-    });
+    if (isEdit && value.quantity !== '') {
+      const tonnes = toTonnes(Number(value.quantity) || 0, value.weightUnit);
+      const perTonne = pricePerUnitToPerTonne(Number(value.pricePerUnit) || 0, value.weightUnit);
+      const factor = nextUnit === 'kg' ? 0.001 : nextUnit === 'quintal' ? 0.1 : 1;
+      onChange({
+        ...value,
+        weightUnit: nextUnit,
+        quantity: fromTonnes(tonnes, nextUnit),
+        pricePerUnit:
+          value.pricePerUnit === ''
+            ? ''
+            : Math.max(0, Number((perTonne * factor).toFixed(2))),
+      });
+      return;
+    }
+
+    onChange({ ...value, weightUnit: nextUnit });
   };
 
   const handleApplyAcreEstimate = () => {
-    if (!value.landAreaAcres || value.landAreaAcres <= 0) return;
-    const est = estimateResidue(value.cropType, value.landAreaAcres, value.baleType);
+    if (value.landAreaInput === '') return;
+    const acres = toAcres(Number(value.landAreaInput) || 0, value.landAreaUnit);
+    const est = estimateResidue(value.cropType, acres, value.baleType);
     onChange({
       ...value,
       quantity: fromTonnes(est.recoverableTonnes, value.weightUnit),
@@ -222,8 +278,14 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
               type="number"
               min="0.01"
               step="any"
+              placeholder={value.weightUnit === 'kg' ? 'e.g. 500' : 'e.g. 15'}
               value={value.quantity}
-              onChange={(e) => onChange({ ...value, quantity: Math.max(0, Number(e.target.value)) })}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  quantity: e.target.value === '' ? '' : Math.max(0, Number(e.target.value)),
+                })
+              }
               className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
               required
             />
@@ -249,38 +311,43 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
             type="number"
             min="0.5"
             step="any"
+            placeholder={
+              value.weightUnit === 'kg'
+                ? 'e.g. 22'
+                : value.weightUnit === 'quintal'
+                  ? 'e.g. 1850'
+                  : 'e.g. 1650'
+            }
             value={value.pricePerUnit}
-            onChange={(e) => onChange({ ...value, pricePerUnit: Math.max(0, Number(e.target.value)) })}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                pricePerUnit: e.target.value === '' ? '' : Math.max(0, Number(e.target.value)),
+              })
+            }
             className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
             required
           />
         </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="block text-xs font-bold text-charcoal-muted uppercase">
-              Farmland Area (Acres, Optional)
-            </label>
-            {value.landAreaAcres > 0 && (
+        <LandAreaField
+          value={value.landAreaInput}
+          unit={value.landAreaUnit}
+          onChangeValue={(landAreaInput) => onChange({ ...value, landAreaInput })}
+          onChangeUnit={(landAreaUnit) => onChange({ ...value, landAreaUnit })}
+          label="Farmland Area (Optional, 0 allowed)"
+          rightAction={
+            value.landAreaInput !== '' ? (
               <button
                 type="button"
                 onClick={handleApplyAcreEstimate}
-                className="text-[10px] font-bold text-forest hover:underline"
+                className="text-[10px] font-bold text-forest hover:underline shrink-0"
               >
                 Auto-Estimate Qty
               </button>
-            )}
-          </div>
-          <input
-            type="number"
-            min="0"
-            max="1000"
-            step="0.5"
-            value={value.landAreaAcres}
-            onChange={(e) => onChange({ ...value, landAreaAcres: Math.max(0, Number(e.target.value)) })}
-            className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
-          />
-        </div>
+            ) : undefined
+          }
+        />
 
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -391,7 +458,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
         <div className="grid grid-cols-3 gap-2 text-center pt-1">
           <div className="p-2 rounded-xl bg-white border border-forest-100">
             <span className="text-[10px] text-charcoal-muted block">Normalized Weight</span>
-            <span className="text-sm font-bold text-charcoal">{normalizedTonnes} Tonnes</span>
+            <span className="text-sm font-bold text-charcoal">{normalizedWeightText} Tonnes</span>
           </div>
           <div className="p-2 rounded-xl bg-white border border-forest-100">
             <span className="text-[10px] text-charcoal-muted block">Metric Rate</span>

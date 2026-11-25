@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Wheat, ArrowRight, X } from 'lucide-react';
-import { StrawSyncStore, pricePerUnitToPerTonne } from '../lib/store';
+import { CalculatorEstimate } from '../types';
+import { StrawSyncStore, pricePerUnitToPerTonne, toAcres } from '../lib/store';
 import { CROP_COEFFICIENTS } from '../lib/engine';
 import ResidueListingFields, {
   ResidueFormState,
@@ -13,51 +14,108 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  initialPrefill?: Partial<CalculatorEstimate> | null;
 }
 
-export default function AddResidueModal({ isOpen, onClose, onSuccess }: Props) {
+function formatIsoDate(offsetDays = 0): string {
+  const date = new Date(Date.now() + offsetDays * 86400000);
+  return date.toISOString().split('T')[0];
+}
+
+function parseProfileLocation(location?: string): {
+  village: string;
+  district: string;
+  state: string;
+} {
+  const parts = (location || '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length >= 3) {
+    return { village: parts[0], district: parts[1], state: parts.slice(2).join(', ') };
+  }
+  if (parts.length === 2) {
+    return { village: '', district: parts[0], state: parts[1] };
+  }
+  if (parts.length === 1) {
+    return { village: '', district: parts[0], state: '' };
+  }
+  return { village: '', district: '', state: '' };
+}
+
+export default function AddResidueModal({
+  isOpen,
+  onClose,
+  onSuccess,
+  initialPrefill = null,
+}: Props) {
   const [formState, setFormState] = useState<ResidueFormState>(() =>
     createInitialResidueState()
   );
-  const [harvestDate, setHarvestDate] = useState<string>('2026-11-20');
-  const [collectionStart, setCollectionStart] = useState<string>('2026-11-22');
-  const [collectionEnd, setCollectionEnd] = useState<string>('2026-12-10');
-  const [village, setVillage] = useState<string>('Dhuri Khurd');
-  const [district, setDistrict] = useState<string>('Sangrur');
-  const [state, setState] = useState<string>('Punjab');
-  const [notes, setNotes] = useState<string>(
-    'High-density square baled lot stored on high ground beside link road.'
-  );
+  const [harvestDate, setHarvestDate] = useState<string>(() => formatIsoDate(0));
+  const [collectionStart, setCollectionStart] = useState<string>(() => formatIsoDate(0));
+  const [collectionEnd, setCollectionEnd] = useState<string>(() => formatIsoDate(14));
+  const [village, setVillage] = useState<string>('');
+  const [district, setDistrict] = useState<string>('');
+  const [state, setState] = useState<string>('');
+  const [notes, setNotes] = useState<string>('');
+  const [formError, setFormError] = useState<string>('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const currentUser = StrawSyncStore.getCurrentUser();
+    const loc = parseProfileLocation(currentUser?.location);
+    setFormState(createInitialResidueState(null, initialPrefill));
+    setVillage(loc.village);
+    setDistrict(loc.district);
+    setState(loc.state);
+    setHarvestDate(formatIsoDate(0));
+    setCollectionStart(formatIsoDate(0));
+    setCollectionEnd(formatIsoDate(14));
+    setNotes('');
+    setFormError('');
+  }, [isOpen, initialPrefill]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const qty = Number(formState.quantity);
+    const price = Number(formState.pricePerUnit);
+    if (!qty || qty <= 0) {
+      setFormError('Please enter an available quantity greater than zero.');
+      return;
+    }
+    if (!price || price <= 0) {
+      setFormError('Please enter an expected farmgate price greater than zero.');
+      return;
+    }
+
+    const rawLand = Number(formState.landAreaInput) || 0;
+    const landAreaAcres = toAcres(rawLand, formState.landAreaUnit);
     const coeff = CROP_COEFFICIENTS[formState.cropType] || CROP_COEFFICIENTS.paddy;
     StrawSyncStore.addListing({
       cropType: formState.cropType,
       customCropName: formState.customCropName.trim() || undefined,
       category: coeff.category,
-      landAreaAcres: formState.landAreaAcres,
-      directQuantity: formState.quantity,
+      landAreaAcres,
+      landAreaUnit: formState.landAreaUnit,
+      originalLandArea: rawLand,
+      directQuantity: qty,
       weightUnit: formState.weightUnit,
-      pricePerUnit: formState.pricePerUnit,
-      expectedPricePerTonne: pricePerUnitToPerTonne(
-        formState.pricePerUnit,
-        formState.weightUnit
-      ),
+      pricePerUnit: price,
+      expectedPricePerTonne: pricePerUnitToPerTonne(price, formState.weightUnit),
       imageUrl: formState.imageUrl || undefined,
       harvestDate,
       collectionStartDate: collectionStart,
       collectionEndDate: collectionEnd,
       baleType: formState.baleType,
       moisturePercentage: formState.moisture,
-      village,
-      district,
-      state,
-      notes,
+      village: village.trim(),
+      district: district.trim(),
+      state: state.trim(),
+      notes: notes.trim(),
     });
-    setFormState(createInitialResidueState());
     if (onSuccess) onSuccess();
     onClose();
   };
@@ -75,7 +133,7 @@ export default function AddResidueModal({ isOpen, onClose, onSuccess }: Props) {
                 Register Crop Residue or Produce Lot
               </h3>
               <p className="text-xs text-charcoal-muted">
-                Enter exact quantity in Kg, Quintal, or Tonnes with optional farm photo
+                Enter your exact quantity in Kg, Quintal, or Tonnes with optional farm photo
               </p>
             </div>
           </div>
@@ -89,6 +147,12 @@ export default function AddResidueModal({ isOpen, onClose, onSuccess }: Props) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
+          {formError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+              {formError}
+            </div>
+          )}
+
           <ResidueListingFields value={formState} onChange={setFormState} />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -100,7 +164,7 @@ export default function AddResidueModal({ isOpen, onClose, onSuccess }: Props) {
                 type="text"
                 value={village}
                 onChange={(e) => setVillage(e.target.value)}
-                placeholder="Village Name"
+                placeholder="Enter village / farm location"
                 className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
                 required
               />
@@ -115,7 +179,7 @@ export default function AddResidueModal({ isOpen, onClose, onSuccess }: Props) {
                   type="text"
                   value={district}
                   onChange={(e) => setDistrict(e.target.value)}
-                  placeholder="District"
+                  placeholder="Enter district"
                   className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
                   required
                 />
@@ -128,7 +192,7 @@ export default function AddResidueModal({ isOpen, onClose, onSuccess }: Props) {
                   type="text"
                   value={state}
                   onChange={(e) => setState(e.target.value)}
-                  placeholder="State"
+                  placeholder="Enter state"
                   className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
                   required
                 />

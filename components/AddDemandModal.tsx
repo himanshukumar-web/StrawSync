@@ -1,30 +1,72 @@
 'use client';
 
-import React, { useState } from 'react';
-import {
-  Building2,
-  ArrowRight,
-  X
-} from 'lucide-react';
-import { CropType, BuyerDemand } from '../types';
+import React, { useEffect, useState } from 'react';
+import { Building2, ArrowRight, X } from 'lucide-react';
+import { CropType, BuyerDemand, CalculatorEstimate } from '../types';
 import { StrawSyncStore } from '../lib/store';
+import { CROP_COEFFICIENTS } from '../lib/engine';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (created: BuyerDemand) => void;
+  initialPrefill?: Partial<CalculatorEstimate> | null;
 }
 
-export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
+export default function AddDemandModal({
+  isOpen,
+  onClose,
+  onSuccess,
+  initialPrefill = null,
+}: Props) {
   const [newCrop, setNewCrop] = useState<CropType>('paddy');
   const [newTonnes, setNewTonnes] = useState<number>(100);
   const [newMaxPrice, setNewMaxPrice] = useState<number>(2300);
   const [newMaxMoisture, setNewMaxMoisture] = useState<number>(15);
   const [newDeadline, setNewDeadline] = useState<string>('2026-12-30');
   const [newIndustry, setNewIndustry] = useState<BuyerDemand['industryType']>('Bio-Pellet Plant');
-  const [newAddress, setNewAddress] = useState<string>('Panipat Industrial Sector 25');
+  const [newAddress, setNewAddress] = useState<string>('Industrial Area Phase II');
   const [newDistrict, setNewDistrict] = useState<string>('Panipat');
   const [newState, setNewState] = useState<string>('Haryana');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const user = StrawSyncStore.getCurrentUser();
+    const locParts = (user?.location || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (locParts.length >= 2) {
+      setNewDistrict(locParts[locParts.length - 2]);
+      setNewState(locParts[locParts.length - 1]);
+    } else if (locParts.length === 1) {
+      setNewDistrict(locParts[0]);
+    }
+    if (locParts.length > 0) {
+      setNewAddress(user?.location || 'Industrial Plant Gate');
+    }
+
+    const deadlineDefault = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    setNewDeadline(deadlineDefault);
+
+    if (initialPrefill) {
+      const crop = initialPrefill.cropType || 'paddy';
+      const coeff = CROP_COEFFICIENTS[crop] || CROP_COEFFICIENTS.paddy;
+      setNewCrop(crop);
+      setNewTonnes(Math.max(1, Math.round(initialPrefill.quantityTonnes || 50)));
+      setNewMaxPrice(
+        Math.round(
+          initialPrefill.pricePerTonne ||
+            (initialPrefill.totalAmount && initialPrefill.quantityTonnes
+              ? initialPrefill.totalAmount / initialPrefill.quantityTonnes
+              : coeff.marketBaseRateMax)
+        )
+      );
+      setNewMaxMoisture(
+        Math.round(initialPrefill.moisturePercent ?? coeff.typicalMoisturePercent)
+      );
+    }
+  }, [isOpen, initialPrefill]);
 
   if (!isOpen) return null;
 
@@ -55,7 +97,7 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
             </div>
             <div>
               <h3 className="text-lg font-bold text-charcoal">
-                Post Biomass Demand Request
+                Post Biomass or Produce Demand Request
               </h3>
               <p className="text-xs text-charcoal-muted">
                 Notify rural farm clusters and activate the liquidity matching engine
@@ -63,6 +105,7 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="w-8 h-8 rounded-full bg-white border border-earth-border flex items-center justify-center text-charcoal-muted hover:text-charcoal"
           >
@@ -74,17 +117,18 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                Biomass Variety
+                Biomass / Produce Variety
               </label>
               <select
                 value={newCrop}
                 onChange={(e) => setNewCrop(e.target.value as CropType)}
                 className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal"
               >
-                <option value="paddy">Paddy Straw (Parali)</option>
-                <option value="wheat">Wheat Straw (Bhusa)</option>
-                <option value="mustard">Mustard Stalk & Husk</option>
-                <option value="sugarcane">Sugarcane Bagasse</option>
+                {(Object.keys(CROP_COEFFICIENTS) as CropType[]).map((key) => (
+                  <option key={key} value={key}>
+                    {CROP_COEFFICIENTS[key].cropName}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -94,9 +138,9 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
               </label>
               <input
                 type="number"
-                min="10"
+                min="1"
                 max="10000"
-                step="10"
+                step="any"
                 value={newTonnes}
                 onChange={(e) => setNewTonnes(Number(e.target.value))}
                 className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal"
@@ -110,6 +154,7 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
               </label>
               <input
                 type="number"
+                min="100"
                 step="50"
                 value={newMaxPrice}
                 onChange={(e) => setNewMaxPrice(Number(e.target.value))}
@@ -125,7 +170,7 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
               <input
                 type="number"
                 min="5"
-                max="30"
+                max="95"
                 value={newMaxMoisture}
                 onChange={(e) => setNewMaxMoisture(Number(e.target.value))}
                 className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal"
@@ -169,7 +214,7 @@ export default function AddDemandModal({ isOpen, onClose, onSuccess }: Props) {
               onChange={(e) => setNewIndustry(e.target.value as BuyerDemand['industryType'])}
               className="w-full px-3 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal"
             >
-              <option value="Bio-Pellet Plant">Bio-Pellet & Briquette Plant</option>
+              <option value="Bio-Pellet Plant">Bio-Pellet &amp; Briquette Plant</option>
               <option value="Ethanol Refinery">2G Bio-Ethanol Refinery</option>
               <option value="Thermal Power Plant">Thermal Power Co-Gen Facility</option>
               <option value="Paper Mill">Agro-Residue Paper Mill</option>

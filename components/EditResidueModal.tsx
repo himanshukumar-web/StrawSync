@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Wheat, ArrowRight, X } from 'lucide-react';
 import { ResidueListing } from '../types';
-import { StrawSyncStore, toTonnes, pricePerUnitToPerTonne } from '../lib/store';
+import { StrawSyncStore, toTonnes, pricePerUnitToPerTonne, toAcres } from '../lib/store';
 import { CROP_COEFFICIENTS, estimateResidue } from '../lib/engine';
 import ResidueListingFields, {
   ResidueFormState,
@@ -48,29 +48,32 @@ export default function EditResidueModal({ isOpen, listing, onClose, onSuccess }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const qty = Number(formState.quantity) || 0;
+    const price = Number(formState.pricePerUnit) || 0;
+    const rawLand = Number(formState.landAreaInput) || 0;
+    const acres = toAcres(rawLand, formState.landAreaUnit);
     const coeff = CROP_COEFFICIENTS[formState.cropType] || CROP_COEFFICIENTS.paddy;
-    const recoverableTonnes = toTonnes(formState.quantity, formState.weightUnit);
-    const expectedPricePerTonne = pricePerUnitToPerTonne(
-      formState.pricePerUnit,
-      formState.weightUnit
-    );
+    const recoverableTonnes = toTonnes(qty, formState.weightUnit);
+    const expectedPricePerTonne = pricePerUnitToPerTonne(price, formState.weightUnit);
     const estimates =
-      formState.landAreaAcres > 0
-        ? estimateResidue(formState.cropType, formState.landAreaAcres, formState.baleType)
+      acres > 0
+        ? estimateResidue(formState.cropType, acres, formState.baleType)
         : null;
 
     StrawSyncStore.updateListing(listing.id, {
       cropType: formState.cropType,
       cropName: formState.customCropName.trim() || coeff.cropName,
       category: coeff.category,
-      landAreaAcres: formState.landAreaAcres,
+      landAreaAcres: acres,
+      landAreaUnit: formState.landAreaUnit,
+      originalLandArea: rawLand,
       estimatedGrossTonnes: estimates
         ? estimates.grossTonnes
         : Number((recoverableTonnes * 1.1).toFixed(2)),
       recoverableTonnes,
-      originalQuantity: formState.quantity,
+      originalQuantity: qty,
       weightUnit: formState.weightUnit,
-      pricePerUnit: formState.pricePerUnit,
+      pricePerUnit: price,
       expectedPricePerTonne,
       imageUrl: formState.imageUrl || undefined,
       harvestDate,
