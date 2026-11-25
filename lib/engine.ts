@@ -1,5 +1,6 @@
 import {
   CropType,
+  ListingCategory,
   BaleType,
   Coordinates,
   ResidueListing,
@@ -10,11 +11,12 @@ import {
 } from '../types';
 
 /**
- * Agronomic Residue Generation Parameters
- * Derived from Indian Agricultural Research Institute (IARI) and Ministry of New and Renewable Energy (MNRE) biomass benchmarks.
+ * Agronomic Residue Generation & Farm Produce Parameters
+ * Derived from Indian Agricultural Research Institute (IARI) and MNRE benchmarks.
  */
 export interface CropCoefficient {
   cropName: string;
+  category: ListingCategory;
   residueRatioTonnesPerAcre: number; // Avg gross residue generated per acre
   defaultRecoveryRate: number;      // Typical field collection recovery factor (0.0 to 1.0)
   calorificValueKcalPerKg: number;  // Higher Heating Value (HHV)
@@ -27,6 +29,7 @@ export interface CropCoefficient {
 export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
   paddy: {
     cropName: 'Paddy Straw (Parali)',
+    category: 'crop_residue',
     residueRatioTonnesPerAcre: 1.6,
     defaultRecoveryRate: 0.82, // 82% recoverable with baler/reaper
     calorificValueKcalPerKg: 3400,
@@ -37,6 +40,7 @@ export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
   },
   wheat: {
     cropName: 'Wheat Straw (Toosa / Bhusa)',
+    category: 'crop_residue',
     residueRatioTonnesPerAcre: 1.4,
     defaultRecoveryRate: 0.88,
     calorificValueKcalPerKg: 3600,
@@ -47,6 +51,7 @@ export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
   },
   mustard: {
     cropName: 'Mustard Stalk & Husk',
+    category: 'crop_residue',
     residueRatioTonnesPerAcre: 1.1,
     defaultRecoveryRate: 0.78,
     calorificValueKcalPerKg: 4000,
@@ -57,6 +62,7 @@ export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
   },
   sugarcane: {
     cropName: 'Sugarcane Trash / Bagasse',
+    category: 'crop_residue',
     residueRatioTonnesPerAcre: 3.4,
     defaultRecoveryRate: 0.72,
     calorificValueKcalPerKg: 2800,
@@ -67,6 +73,7 @@ export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
   },
   cotton: {
     cropName: 'Cotton Stalks',
+    category: 'crop_residue',
     residueRatioTonnesPerAcre: 1.25,
     defaultRecoveryRate: 0.75,
     calorificValueKcalPerKg: 4100,
@@ -77,6 +84,7 @@ export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
   },
   maize: {
     cropName: 'Maize Stover & Cobs',
+    category: 'crop_residue',
     residueRatioTonnesPerAcre: 1.85,
     defaultRecoveryRate: 0.80,
     calorificValueKcalPerKg: 3750,
@@ -84,6 +92,50 @@ export const CROP_COEFFICIENTS: Record<CropType, CropCoefficient> = {
     marketBaseRateMin: 1500,
     marketBaseRateMax: 2300,
     co2AbatementTonnesPerTonne: 1.42,
+  },
+  vegetables: {
+    cropName: 'Fresh Vegetables Lot',
+    category: 'vegetables',
+    residueRatioTonnesPerAcre: 6.5,
+    defaultRecoveryRate: 0.92,
+    calorificValueKcalPerKg: 1200,
+    typicalMoisturePercent: 78,
+    marketBaseRateMin: 12000,
+    marketBaseRateMax: 28000,
+    co2AbatementTonnesPerTonne: 0.90,
+  },
+  fruits: {
+    cropName: 'Seasonal Fruits Lot',
+    category: 'fruits',
+    residueRatioTonnesPerAcre: 5.5,
+    defaultRecoveryRate: 0.90,
+    calorificValueKcalPerKg: 1400,
+    typicalMoisturePercent: 80,
+    marketBaseRateMin: 18000,
+    marketBaseRateMax: 45000,
+    co2AbatementTonnesPerTonne: 0.95,
+  },
+  orchard: {
+    cropName: 'Orchard / Horticultural Produce',
+    category: 'fruits',
+    residueRatioTonnesPerAcre: 4.5,
+    defaultRecoveryRate: 0.88,
+    calorificValueKcalPerKg: 1600,
+    typicalMoisturePercent: 65,
+    marketBaseRateMin: 15000,
+    marketBaseRateMax: 35000,
+    co2AbatementTonnesPerTonne: 1.00,
+  },
+  agri_waste: {
+    cropName: 'Organic Agri-Waste',
+    category: 'agri_waste',
+    residueRatioTonnesPerAcre: 1.8,
+    defaultRecoveryRate: 0.80,
+    calorificValueKcalPerKg: 3100,
+    typicalMoisturePercent: 20,
+    marketBaseRateMin: 1100,
+    marketBaseRateMax: 2000,
+    co2AbatementTonnesPerTonne: 1.30,
   },
 };
 
@@ -244,8 +296,9 @@ export function evaluateMatch(
     return null;
   }
 
-  // Hard incompatibility: Already fully committed or sold
-  if (listing.status === 'sold' || demand.status === 'fulfilled') {
+  // Hard incompatibility: Already fully committed, fulfilled, or sold
+  const remainingNeededRaw = Math.max(0, demand.requiredTonnes - demand.fulfilledTonnes);
+  if (listing.status === 'sold' || demand.status === 'fulfilled' || remainingNeededRaw <= 0) {
     return null;
   }
 
@@ -255,7 +308,7 @@ export function evaluateMatch(
   );
 
   // Recommended transport configuration
-  const matchedTonnes = Math.min(listing.recoverableTonnes, demand.requiredTonnes - demand.fulfilledTonnes);
+  const matchedTonnes = Math.min(listing.recoverableTonnes, remainingNeededRaw);
   const vehicle = recommendVehicle(matchedTonnes, distanceKm);
   const cost = calculateDeliveredCost(
     listing.expectedPricePerTonne,

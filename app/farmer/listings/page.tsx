@@ -16,24 +16,38 @@ import {
 import DashboardLayout from '../../../components/DashboardLayout';
 import AddResidueModal from '../../../components/AddResidueModal';
 import EditResidueModal from '../../../components/EditResidueModal';
-import { ResidueListing } from '../../../types';
-import { StrawSyncStore } from '../../../lib/store';
+import { ResidueListing, UserProfile } from '../../../types';
+import {
+  StrawSyncStore,
+  formatWeight,
+  formatUnitPrice,
+} from '../../../lib/store';
 
 export default function FarmerListingsPage() {
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingListing, setEditingListing] = useState<ResidueListing | null>(null);
 
   useEffect(() => {
+    setCurrentUser(StrawSyncStore.getCurrentUser());
     setListings(StrawSyncStore.getListings());
     const unsubscribe = StrawSyncStore.subscribe(() => {
+      setCurrentUser(StrawSyncStore.getCurrentUser());
       setListings(StrawSyncStore.getListings());
     });
     return () => unsubscribe();
   }, []);
 
-  const filteredListings = listings.filter((l) => {
+  const isAdminView = currentUser?.role === 'admin';
+  const scopedListings = isAdminView
+    ? listings
+    : currentUser
+      ? listings.filter((l) => l.farmerId === currentUser.id)
+      : [];
+
+  const filteredListings = scopedListings.filter((l) => {
     if (filterStatus === 'all') return true;
     return l.status === filterStatus;
   });
@@ -60,7 +74,7 @@ export default function FarmerListingsPage() {
               </Link>
             </div>
             <h1 className="text-2xl font-bold text-charcoal mt-1">
-              My Crop Residue Listings
+              {isAdminView ? 'All Farmer Crop Residue Listings' : 'My Crop Residue Listings'}
             </h1>
             <p className="text-xs text-charcoal-muted">
               Manage your farmgate biomass lots, track verification, and inspect liquidity estimates
@@ -88,7 +102,7 @@ export default function FarmerListingsPage() {
                   : 'bg-white text-charcoal-muted border border-earth-border hover:bg-sand'
               }`}
             >
-              {status} ({listings.filter((l) => status === 'all' || l.status === status).length})
+              {status} ({scopedListings.filter((l) => status === 'all' || l.status === status).length})
             </button>
           ))}
         </div>
@@ -134,12 +148,27 @@ export default function FarmerListingsPage() {
                   className="bg-white rounded-3xl p-6 border border-earth-border shadow-subtle hover:border-forest-300 transition flex flex-col justify-between"
                 >
                   <div className="space-y-3">
+                    {listing.imageUrl ? (
+                      <img
+                        src={listing.imageUrl}
+                        alt={listing.cropName}
+                        className="w-full h-36 object-cover rounded-2xl border border-earth-border bg-sand"
+                      />
+                    ) : (
+                      <div className="w-full h-20 rounded-2xl bg-emerald-50/70 border border-forest-100 flex items-center justify-center gap-2 text-xs font-semibold text-forest">
+                        <Wheat className="w-4 h-4" />
+                        <span className="capitalize">
+                          {(listing.category || 'crop_residue').replace(/_/g, ' ')} Lot
+                        </span>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between">
                       <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${badge.bg}`}>
                         {badge.text}
                       </span>
                       <span className="text-xs text-charcoal-muted font-medium">
-                        {listing.landAreaAcres} Acres Plot
+                        {listing.landAreaAcres > 0 ? `${listing.landAreaAcres} Acres Plot` : 'Direct Weight Lot'}
                       </span>
                     </div>
 
@@ -155,20 +184,43 @@ export default function FarmerListingsPage() {
 
                     <div className="p-3.5 rounded-2xl bg-sand border border-earth-border grid grid-cols-2 gap-2 text-xs">
                       <div>
-                        <span className="text-[10px] text-charcoal-muted block">Recoverable Biomass</span>
-                        <span className="font-bold text-forest text-sm">{listing.recoverableTonnes} Tonnes</span>
+                        <span className="text-[10px] text-charcoal-muted block">Available Stock</span>
+                        <span className="font-bold text-forest text-sm">
+                          {formatWeight(
+                            listing.originalQuantity ?? listing.recoverableTonnes,
+                            listing.weightUnit
+                          )}
+                        </span>
+                        {listing.weightUnit && listing.weightUnit !== 'tonne' && (
+                          <span className="text-[10px] text-charcoal-muted block">
+                            ({listing.recoverableTonnes} Tonnes)
+                          </span>
+                        )}
                       </div>
                       <div>
                         <span className="text-[10px] text-charcoal-muted block">Expected Farmgate</span>
-                        <span className="font-bold text-charcoal text-sm">₹{listing.expectedPricePerTonne}/t</span>
+                        <span className="font-bold text-charcoal text-sm">
+                          {listing.weightUnit &&
+                          listing.weightUnit !== 'tonne' &&
+                          listing.pricePerUnit !== undefined
+                            ? formatUnitPrice(listing.pricePerUnit, listing.weightUnit)
+                            : `₹${listing.expectedPricePerTonne}/t`}
+                        </span>
+                        {listing.weightUnit && listing.weightUnit !== 'tonne' && (
+                          <span className="text-[10px] text-charcoal-muted block">
+                            (₹{listing.expectedPricePerTonne.toLocaleString('en-IN')}/t)
+                          </span>
+                        )}
                       </div>
                       <div>
-                        <span className="text-[10px] text-charcoal-muted block">Moisture & Form</span>
+                        <span className="text-[10px] text-charcoal-muted block">Moisture &amp; Form</span>
                         <span className="font-semibold text-charcoal">{listing.moisturePercentage}% ({listing.baleType})</span>
                       </div>
                       <div>
                         <span className="text-[10px] text-charcoal-muted block">Estimated Value</span>
-                        <span className="font-bold text-forest">₹{(listing.recoverableTonnes * listing.expectedPricePerTonne).toLocaleString('en-IN')}</span>
+                        <span className="font-bold text-forest">
+                          ₹{Math.round(listing.recoverableTonnes * listing.expectedPricePerTonne).toLocaleString('en-IN')}
+                        </span>
                       </div>
                     </div>
 

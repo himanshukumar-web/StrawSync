@@ -18,7 +18,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { UserRole } from '../../types';
-import { StrawSyncStore } from '../../lib/store';
+import { StrawSyncStore, normalizeIdentifier } from '../../lib/store';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -28,7 +28,7 @@ export default function RegisterPage() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [location, setLocation] = useState('Sangrur, Punjab');
+  const [location, setLocation] = useState('');
   const [organization, setOrganization] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -36,21 +36,33 @@ export default function RegisterPage() {
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccess('');
 
     if (!name.trim()) {
       setError('Please enter your full name or registered farm/enterprise name.');
       return;
     }
-    if (!email.trim() || !email.includes('@')) {
-      setError('Please enter a valid official email address.');
+
+    const normPhone = normalizeIdentifier(phone);
+    const normEmail = normalizeIdentifier(email);
+
+    if (!normPhone && !normEmail) {
+      setError('Please enter at least a 10-digit mobile number or an email address.');
       return;
     }
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    if (cleanPhone.length < 10) {
+    if (email.trim() && !email.includes('@')) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    if (phone.trim() && normPhone.length < 10) {
       setError('Please enter a valid 10-digit mobile number.');
       return;
     }
-    if (!password || password.length < 6) {
+    if (!location.trim()) {
+      setError('Please enter your district and state.');
+      return;
+    }
+    if (!password.trim() || password.trim().length < 6) {
       setError('Password must be at least 6 characters in length.');
       return;
     }
@@ -59,21 +71,26 @@ export default function RegisterPage() {
       return;
     }
 
-    const newUser = StrawSyncStore.registerUser({
-      name,
+    const result = StrawSyncStore.register({
+      name: name.trim(),
       role: selectedRole,
-      phone: phone.startsWith('+91') ? phone : `+91 ${cleanPhone.slice(-10)}`,
-      email,
-      organization: organization || (selectedRole === 'farmer' ? 'Kisan Producer Group' : selectedRole === 'buyer' ? 'Biomass Enterprise' : 'Freight Transport'),
-      location: location || 'Punjab Belt',
+      phone: normPhone,
+      email: normEmail,
+      organization: organization.trim() || (selectedRole === 'farmer' ? 'Kisan Producer Group' : selectedRole === 'buyer' ? 'Biomass Enterprise' : 'Freight Transport'),
+      location: location.trim(),
       coordinates: { lat: 30.3742, lng: 75.8712 },
-      password,
+      password: password.trim(),
     });
 
-    setSuccess(`Account successfully created for ${newUser.name}! Redirecting to ${selectedRole} dashboard...`);
+    if (!result.success) {
+      setError(result.error);
+      return;
+    }
+
+    setSuccess(`Account created for ${result.user.name}! Redirecting to ${selectedRole} dashboard...`);
     setTimeout(() => {
-      router.push(`/${selectedRole}/dashboard`);
-    }, 450);
+      router.push(`/${result.user.role}/dashboard`);
+    }, 350);
   };
 
   return (
@@ -200,7 +217,7 @@ export default function RegisterPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                  Email Address *
+                  Email Address
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -210,24 +227,22 @@ export default function RegisterPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full pl-10 pr-4 py-2.5 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
-                    required
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                  10-Digit Mobile Number *
+                  10-Digit Mobile Number
                 </label>
                 <div className="relative">
                   <Phone className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
                   <input
                     type="tel"
-                    placeholder="+91 98721 00000"
+                    placeholder="+91 94178 85574 or 9417885574"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     className="w-full pl-10 pr-4 py-2.5 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
-                    required
                   />
                 </div>
               </div>
@@ -271,16 +286,17 @@ export default function RegisterPage() {
 
             <div>
               <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                Primary District & State
+                Primary District & State *
               </label>
               <div className="relative">
                 <MapPin className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
                 <input
                   type="text"
-                  placeholder="Sangrur, Punjab"
+                  placeholder="e.g. Ghaziabad, UP"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
+                  required
                 />
               </div>
             </div>

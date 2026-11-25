@@ -59,14 +59,14 @@ type AdminTab =
   | 'alerts';
 
 export default function AdminDashboardPage() {
-  const [currentUser, setCurrentUser] = useState(StrawSyncStore.getCurrentUser());
-  const [stats, setStats] = useState(StrawSyncStore.getPlatformStats());
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [stats, setStats] = useState(() => StrawSyncStore.getPlatformStats(false));
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [demands, setDemands] = useState<BuyerDemand[]>([]);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
-  const [settings, setSettings] = useState<PlatformSettings>(StrawSyncStore.getPlatformSettings());
+  const [settings, setSettings] = useState<PlatformSettings>(() => StrawSyncStore.getPlatformSettings(false));
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [notification, setNotification] = useState<string>('');
@@ -80,7 +80,7 @@ export default function AdminDashboardPage() {
   const [cancelOrderModal, setCancelOrderModal] = useState<PurchaseOrder | null>(null);
   const [cancelReason, setCancelReason] = useState('Quality inspection failure at weighbridge');
   const [assignLogisticsModal, setAssignLogisticsModal] = useState<PurchaseOrder | null>(null);
-  const [selectedPartnerId, setSelectedPartnerId] = useState('user-log-1');
+  const [selectedPartnerId, setSelectedPartnerId] = useState('user-logistics-1');
   const [disputeModal, setDisputeModal] = useState<PurchaseOrder | null>(null);
   const [disputeResolution, setDisputeResolution] = useState('Moisture deduction applied per CPCB guidelines');
   const [adjustmentAmount, setAdjustmentAmount] = useState<number>(1500);
@@ -569,7 +569,7 @@ export default function AdminDashboardPage() {
                   <div className="text-right shrink-0">
                     <span className="text-[10px] uppercase font-bold text-charcoal-muted block">Intake Progress</span>
                     <span className="text-sm font-bold text-forest">
-                      {Math.round((d.fulfilledTonnes / d.requiredTonnes) * 100)}% Fulfilled
+                      {d.requiredTonnes > 0 ? Math.min(100, Math.round((d.fulfilledTonnes / d.requiredTonnes) * 100)) : 0}% Fulfilled
                     </span>
                   </div>
                 </div>
@@ -701,6 +701,28 @@ export default function AdminDashboardPage() {
                       >
                         Resolve Dispute
                       </button>
+
+                      {o.status === 'delivered' && o.paymentStatus !== 'settled' && (
+                        <button
+                          onClick={() => {
+                            const res = StrawSyncStore.confirmDeliveryAndReleasePayment(o.id);
+                            showNotification(
+                              res.success
+                                ? `Escrow released for PO #${o.orderNumber} (UTR: ${res.transaction.utrNumber})`
+                                : res.error
+                            );
+                          }}
+                          className="px-3 py-1.5 bg-forest hover:bg-forest-700 text-white rounded-xl font-bold transition"
+                        >
+                          Confirm & Release Escrow
+                        </button>
+                      )}
+
+                      {o.utrNumber && (
+                        <span className="px-2.5 py-1 bg-emerald-50 border border-forest-200 text-forest rounded-xl font-bold">
+                          UTR: {o.utrNumber}
+                        </span>
+                      )}
 
                       {o.status !== 'cancelled' && o.status !== 'settled' && (
                         <button

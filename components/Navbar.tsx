@@ -8,47 +8,86 @@ import {
   Truck,
   Building2,
   ShieldCheck,
-  ChevronDown,
   Wheat,
   Calculator,
   ArrowRight,
   Menu,
   X,
   LogOut,
-  User,
-  ShoppingBag,
-  ListOrdered
+  Bell,
+  CheckCheck,
+  Coins,
+  PackageCheck,
 } from 'lucide-react';
 import { StrawSyncStore } from '../lib/store';
-import { UserProfile, UserRole } from '../types';
+import { PlatformNotification, UserProfile, UserRole } from '../types';
 import ResidueCalculatorModal from './ResidueCalculatorModal';
+
+interface NavLinkItem {
+  label: string;
+  href: string;
+  matchPrefix?: string;
+}
+
+function getRoleNavLinks(role?: UserRole): NavLinkItem[] {
+  switch (role) {
+    case 'farmer':
+      return [
+        { label: 'Overview', href: '/' },
+        { label: 'Farmer Hub', href: '/farmer/dashboard', matchPrefix: '/farmer/dashboard' },
+        { label: 'My Listings', href: '/farmer/listings', matchPrefix: '/farmer/listings' },
+        { label: 'My Orders', href: '/farmer/orders', matchPrefix: '/farmer/orders' },
+      ];
+    case 'buyer':
+      return [
+        { label: 'Overview', href: '/' },
+        { label: 'Buyer Dashboard', href: '/buyer/dashboard', matchPrefix: '/buyer/dashboard' },
+        { label: 'Buyer Marketplace', href: '/buyer/marketplace', matchPrefix: '/buyer/marketplace' },
+        { label: 'My Orders', href: '/buyer/orders', matchPrefix: '/buyer/orders' },
+      ];
+    case 'logistics':
+      return [
+        { label: 'Overview', href: '/' },
+        { label: 'Smart Logistics', href: '/logistics/dashboard', matchPrefix: '/logistics' },
+      ];
+    case 'admin':
+      return [
+        { label: 'Overview', href: '/' },
+        { label: 'Farmer Hub', href: '/farmer/dashboard', matchPrefix: '/farmer' },
+        { label: 'Buyer Marketplace', href: '/buyer/marketplace', matchPrefix: '/buyer' },
+        { label: 'Smart Logistics', href: '/logistics/dashboard', matchPrefix: '/logistics' },
+        { label: 'Admin Oversight', href: '/admin/dashboard', matchPrefix: '/admin' },
+      ];
+    default:
+      return [{ label: 'Overview', href: '/' }];
+  }
+}
 
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [showRoleMenu, setShowRoleMenu] = useState(false);
+  const [notifications, setNotifications] = useState<PlatformNotification[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [calculatorOpen, setCalculatorOpen] = useState(false);
 
   useEffect(() => {
-    setCurrentUser(StrawSyncStore.getCurrentUser());
-    const unsubscribe = StrawSyncStore.subscribe(() => {
-      setCurrentUser(StrawSyncStore.getCurrentUser());
-    });
+    const syncAuthAndAlerts = () => {
+      const user = StrawSyncStore.getCurrentUser();
+      setCurrentUser(user);
+      setNotifications(user ? StrawSyncStore.getNotifications(user.id) : []);
+    };
+    syncAuthAndAlerts();
+    const unsubscribe = StrawSyncStore.subscribe(syncAuthAndAlerts);
     return () => unsubscribe();
   }, []);
 
-  const handleRoleSelect = (role: UserRole) => {
-    StrawSyncStore.switchRole(role);
-    setShowRoleMenu(false);
-    setMobileMenuOpen(false);
-    router.push(`/${role}/dashboard`);
-  };
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
   const handleLogout = () => {
     StrawSyncStore.logout();
-    setShowRoleMenu(false);
+    setNotifOpen(false);
     setMobileMenuOpen(false);
     router.push('/login');
   };
@@ -66,8 +105,14 @@ export default function Navbar() {
     }
   };
 
+  const navLinks = getRoleNavLinks(currentUser?.role);
   const currentBadge = currentUser ? getRoleBadge(currentUser.role) : null;
   const RoleIcon = currentBadge ? currentBadge.icon : Wheat;
+
+  const isNavLinkActive = (item: NavLinkItem) => {
+    if (item.href === '/') return pathname === '/';
+    return item.matchPrefix ? pathname?.startsWith(item.matchPrefix) : pathname === item.href;
+  };
 
   return (
     <>
@@ -98,58 +143,22 @@ export default function Navbar() {
                 </div>
               </Link>
 
-              {/* Desktop Nav Links */}
+              {/* Desktop Nav Links (strictly isolated by active user role) */}
               <nav className="hidden md:flex items-center gap-1">
-                <Link
-                  href="/"
-                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${
-                    pathname === '/'
-                      ? 'text-forest bg-sage/60'
-                      : 'text-charcoal-soft hover:text-forest hover:bg-sage/30'
-                  }`}
-                >
-                  Overview
-                </Link>
-                <Link
-                  href="/farmer/dashboard"
-                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${
-                    pathname?.startsWith('/farmer')
-                      ? 'text-forest bg-sage/60'
-                      : 'text-charcoal-soft hover:text-forest hover:bg-sage/30'
-                  }`}
-                >
-                  Farmer Hub
-                </Link>
-                <Link
-                  href="/buyer/marketplace"
-                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${
-                    pathname?.startsWith('/buyer')
-                      ? 'text-forest bg-sage/60'
-                      : 'text-charcoal-soft hover:text-forest hover:bg-sage/30'
-                  }`}
-                >
-                  Buyer Marketplace
-                </Link>
-                <Link
-                  href="/logistics/dashboard"
-                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${
-                    pathname?.startsWith('/logistics')
-                      ? 'text-forest bg-sage/60'
-                      : 'text-charcoal-soft hover:text-forest hover:bg-sage/30'
-                  }`}
-                >
-                  Smart Logistics
-                </Link>
-                <Link
-                  href="/admin/dashboard"
-                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${
-                    pathname?.startsWith('/admin')
-                      ? 'text-forest bg-sage/60'
-                      : 'text-charcoal-soft hover:text-forest hover:bg-sage/30'
-                  }`}
-                >
-                  Admin Oversight
-                </Link>
+                {navLinks.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition ${
+                      isNavLinkActive(item)
+                        ? 'text-forest bg-sage/60'
+                        : 'text-charcoal-soft hover:text-forest hover:bg-sage/30'
+                    }`}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
               </nav>
             </div>
 
@@ -165,127 +174,128 @@ export default function Navbar() {
                 <span>Calculator</span>
               </button>
 
-              {/* Persona Switcher / User Profile */}
+              {/* Logged-in Identity Badge, Notification Bell & Logout */}
               {currentUser ? (
-                <div className="relative">
-                  <button
-                    onClick={() => setShowRoleMenu(!showRoleMenu)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-earth-border rounded-xl shadow-subtle hover:border-forest-300 transition text-left"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-forest-100 flex items-center justify-center text-forest">
+                <>
+                  {/* Notification Bell Dropdown */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setNotifOpen(!notifOpen)}
+                      aria-label="Notifications"
+                      className="relative p-2 bg-white border border-earth-border rounded-xl shadow-subtle hover:border-forest-300 text-charcoal transition"
+                    >
+                      <Bell className="w-4 h-4 text-forest" />
+                      {unreadCount > 0 && (
+                        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                          {unreadCount}
+                        </span>
+                      )}
+                    </button>
+
+                    {notifOpen && (
+                      <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-elevated border border-earth-border py-2 z-50">
+                        <div className="px-4 py-2.5 border-b border-earth-border flex items-center justify-between">
+                          <span className="text-xs font-bold text-charcoal">
+                            Alerts & Escrow Updates ({unreadCount} unread)
+                          </span>
+                          {unreadCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => StrawSyncStore.markAllNotificationsRead(currentUser.id)}
+                              className="text-[11px] font-semibold text-forest hover:underline flex items-center gap-1"
+                            >
+                              <CheckCheck className="w-3.5 h-3.5" />
+                              <span>Mark all read</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="max-h-72 overflow-y-auto divide-y divide-earth-border">
+                          {notifications.length === 0 ? (
+                            <div className="p-5 text-center text-xs text-charcoal-muted">
+                              No notifications yet. Delivery and escrow settlement updates appear here in real time.
+                            </div>
+                          ) : (
+                            notifications.slice(0, 8).map((n) => (
+                              <button
+                                key={n.id}
+                                type="button"
+                                onClick={() => StrawSyncStore.markNotificationRead(n.id)}
+                                className={`w-full text-left px-4 py-3 hover:bg-sand transition flex items-start gap-2.5 ${
+                                  !n.read ? 'bg-sage/40' : 'bg-white'
+                                }`}
+                              >
+                                <div className="mt-0.5 shrink-0">
+                                  {n.type === 'payment' ? (
+                                    <Coins className="w-4 h-4 text-forest" />
+                                  ) : n.type === 'delivery' ? (
+                                    <PackageCheck className="w-4 h-4 text-blue-700" />
+                                  ) : (
+                                    <Bell className="w-4 h-4 text-amber-700" />
+                                  )}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs font-bold text-charcoal truncate">{n.title}</span>
+                                    {!n.read && <span className="w-2 h-2 rounded-full bg-forest shrink-0" />}
+                                  </div>
+                                  <p className="text-[11px] text-charcoal-soft mt-0.5 leading-snug">{n.message}</p>
+                                  <span className="text-[10px] text-charcoal-muted mt-1 block">
+                                    {new Date(n.createdAt).toLocaleString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-earth-border rounded-xl shadow-subtle text-left">
+                    <div className="w-7 h-7 rounded-lg bg-forest-100 flex items-center justify-center text-forest shrink-0">
                       <RoleIcon className="w-4 h-4" />
                     </div>
                     <div className="text-left leading-tight">
-                      <div className="text-[10px] font-medium text-charcoal-muted flex items-center gap-1">
-                        <span>Persona:</span>
-                        <span className="font-bold text-charcoal capitalize">{currentUser.role}</span>
-                      </div>
-                      <div className="text-xs font-bold text-forest-800 truncate max-w-[130px]">
+                      <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${currentBadge?.bg}`}>
+                        {currentBadge?.label}
+                      </span>
+                      <div className="text-xs font-bold text-charcoal truncate max-w-[140px]">
                         {currentUser.name}
                       </div>
                     </div>
-                    <ChevronDown className="w-3.5 h-3.5 text-charcoal-muted ml-0.5" />
+                  </div>
+
+                  <Link
+                    href={`/${currentUser.role}/dashboard`}
+                    className="px-3.5 py-2 text-xs font-bold text-white bg-forest hover:bg-forest-700 rounded-xl shadow-subtle transition flex items-center gap-1.5"
+                  >
+                    <span>My Dashboard</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+
+                  <button
+                    onClick={handleLogout}
+                    title="Sign Out"
+                    className="px-3 py-2 text-xs font-bold text-red-600 bg-white hover:bg-red-50 border border-earth-border rounded-xl shadow-subtle transition flex items-center gap-1.5"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Logout</span>
                   </button>
-
-                  {showRoleMenu && (
-                    <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-elevated border border-earth-border py-2 z-50">
-                      <div className="px-4 py-2 border-b border-earth-border">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-charcoal-muted">
-                          Switch Live Role
-                        </p>
-                        <p className="text-[11px] text-charcoal-muted mt-0.5">
-                          Change operational persona or test multi-role flow
-                        </p>
-                      </div>
-
-                      <div className="p-1 space-y-1">
-                        <button
-                          onClick={() => handleRoleSelect('farmer')}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition ${
-                            currentUser?.role === 'farmer' ? 'bg-forest-50 text-forest' : 'hover:bg-sand text-charcoal'
-                          }`}
-                        >
-                          <div className="w-7 h-7 rounded-lg bg-emerald-100 text-forest-700 flex items-center justify-center shrink-0">
-                            <Wheat className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold">Farmer (Gurpreet Singh)</div>
-                            <div className="text-[10px] text-charcoal-muted">List residue, monitor orders</div>
-                          </div>
-                        </button>
-
-                        <button
-                          onClick={() => handleRoleSelect('buyer')}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition ${
-                            currentUser?.role === 'buyer' ? 'bg-blue-50 text-blue-800' : 'hover:bg-sand text-charcoal'
-                          }`}
-                        >
-                          <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0">
-                            <Building2 className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold">Buyer (GreenSource Bio)</div>
-                            <div className="text-[10px] text-charcoal-muted">Biomass demand & orders</div>
-                          </div>
-                        </button>
-
-                        <button
-                          onClick={() => handleRoleSelect('logistics')}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition ${
-                            currentUser?.role === 'logistics' ? 'bg-amber-50 text-amber-800' : 'hover:bg-sand text-charcoal'
-                          }`}
-                        >
-                          <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                            <Truck className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold">Logistics Fleet (Khalsa)</div>
-                            <div className="text-[10px] text-charcoal-muted">Dispatch & weighbridge</div>
-                          </div>
-                        </button>
-
-                        <button
-                          onClick={() => handleRoleSelect('admin')}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition ${
-                            currentUser?.role === 'admin' ? 'bg-purple-50 text-purple-800' : 'hover:bg-sand text-charcoal'
-                          }`}
-                        >
-                          <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold">Admin (Oversight Cell)</div>
-                            <div className="text-[10px] text-charcoal-muted">CPCB co-firing metrics</div>
-                          </div>
-                        </button>
-                      </div>
-
-                      <div className="px-3 pt-2 border-t border-earth-border flex items-center justify-between text-xs">
-                        <Link
-                          href={`/${currentUser.role}/dashboard`}
-                          onClick={() => setShowRoleMenu(false)}
-                          className="text-forest font-bold hover:underline"
-                        >
-                          Open Dashboard →
-                        </Link>
-                        <button
-                          onClick={handleLogout}
-                          className="text-red-600 font-semibold hover:underline flex items-center gap-1"
-                        >
-                          <LogOut className="w-3 h-3" />
-                          <span>Sign Out</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                </>
               ) : (
                 <div className="flex items-center gap-2">
                   <Link
                     href="/login"
                     className="px-3.5 py-2 text-xs font-bold text-charcoal hover:text-forest transition"
                   >
-                    Sign In
+                    Login
                   </Link>
                   <Link
                     href="/register"
@@ -294,17 +304,6 @@ export default function Navbar() {
                     Register
                   </Link>
                 </div>
-              )}
-
-              {/* Dedicated Dashboard Quick Access */}
-              {currentUser && (
-                <Link
-                  href={`/${currentUser.role}/dashboard`}
-                  className="px-3.5 py-2 text-xs font-bold text-white bg-forest hover:bg-forest-700 rounded-xl shadow-subtle transition flex items-center gap-1.5"
-                >
-                  <span>My Dashboard</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Link>
               )}
             </div>
 
@@ -331,55 +330,20 @@ export default function Navbar() {
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-earth-border bg-white px-4 pt-3 pb-6 space-y-4">
             <div className="space-y-1">
-              <Link
-                href="/"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 rounded-lg text-xs font-bold text-charcoal hover:bg-sand"
-              >
-                Overview
-              </Link>
-              <Link
-                href="/farmer/dashboard"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 rounded-lg text-xs font-bold text-charcoal hover:bg-sand"
-              >
-                Farmer Hub
-              </Link>
-              <Link
-                href="/farmer/listings"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 pl-6 rounded-lg text-xs text-charcoal-muted hover:bg-sand"
-              >
-                → Residue Listings
-              </Link>
-              <Link
-                href="/buyer/marketplace"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 rounded-lg text-xs font-bold text-charcoal hover:bg-sand"
-              >
-                Buyer Marketplace
-              </Link>
-              <Link
-                href="/buyer/orders"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 pl-6 rounded-lg text-xs text-charcoal-muted hover:bg-sand"
-              >
-                → Buyer Orders
-              </Link>
-              <Link
-                href="/logistics/dashboard"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 rounded-lg text-xs font-bold text-charcoal hover:bg-sand"
-              >
-                Smart Logistics Fleet
-              </Link>
-              <Link
-                href="/admin/dashboard"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-3 py-2 rounded-lg text-xs font-bold text-charcoal hover:bg-sand"
-              >
-                Admin Oversight
-              </Link>
+              {navLinks.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`block px-3 py-2 rounded-lg text-xs font-bold ${
+                    isNavLinkActive(item)
+                      ? 'bg-sage/60 text-forest'
+                      : 'text-charcoal hover:bg-sand'
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              ))}
             </div>
 
             <div className="border-t border-earth-border pt-3 space-y-2">
@@ -392,7 +356,7 @@ export default function Navbar() {
                     onClick={handleLogout}
                     className="text-red-600 font-bold hover:underline"
                   >
-                    Sign Out
+                    Logout
                   </button>
                 </div>
               ) : (
@@ -402,7 +366,7 @@ export default function Navbar() {
                     onClick={() => setMobileMenuOpen(false)}
                     className="p-2 text-center rounded-xl border border-earth-border text-xs font-bold text-charcoal"
                   >
-                    Sign In
+                    Login
                   </Link>
                   <Link
                     href="/register"

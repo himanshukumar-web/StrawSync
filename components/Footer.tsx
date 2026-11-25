@@ -64,7 +64,8 @@ export default function Footer() {
               </li>
               <li>
                 <Link href="/farmer/listings" className="hover:text-forest transition">
-                  Farmer Residue Listings
+                  Fa
+                  rmer Residue Listings
                 </Link>
               </li>
               <li>

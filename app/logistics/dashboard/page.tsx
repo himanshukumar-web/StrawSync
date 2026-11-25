@@ -17,8 +17,8 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
-import { PurchaseOrder, OrderStatus } from '../../../types';
-import { StrawSyncStore } from '../../../lib/store';
+import { PurchaseOrder, OrderStatus, UserProfile } from '../../../types';
+import { StrawSyncStore, formatWeight } from '../../../lib/store';
 import { FLEET_OPTIONS } from '../../../lib/engine';
 
 const MapComponent = dynamic(() => import('../../../components/MapComponent'), {
@@ -34,10 +34,11 @@ const MapComponent = dynamic(() => import('../../../components/MapComponent'), {
 });
 
 export default function LogisticsDashboardPage() {
-  const [currentUser, setCurrentUser] = useState(StrawSyncStore.getCurrentUser());
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [updateMsg, setUpdateMsg] = useState<string>('');
+  const [vehicleInputMap, setVehicleInputMap] = useState<Record<string, string>>({});
   const [proofModalOrder, setProofModalOrder] = useState<PurchaseOrder | null>(null);
   const [slipNumber, setSlipNumber] = useState('WB-2026-9812');
   const [grossWeight, setGrossWeight] = useState('24.8');
@@ -47,48 +48,127 @@ export default function LogisticsDashboardPage() {
     setCurrentUser(StrawSyncStore.getCurrentUser());
     const allOrders = StrawSyncStore.getOrders();
     setOrders(allOrders);
-    if (allOrders.length > 0) setSelectedOrder(allOrders[0]);
 
     const unsubscribe = StrawSyncStore.subscribe(() => {
       setCurrentUser(StrawSyncStore.getCurrentUser());
       const updated = StrawSyncStore.getOrders();
       setOrders(updated);
-      if (selectedOrder) {
-        const found = updated.find((o) => o.id === selectedOrder.id);
-        if (found) setSelectedOrder(found);
-      }
+      setSelectedOrder((prev) => (prev ? updated.find((o) => o.id === prev.id) || null : null));
     });
     return () => unsubscribe();
   }, []);
 
+  const isAdminView = currentUser?.role === 'admin';
+  // Hide unconfirmed ('requested') requests until farmer acceptance; scope to own fleet + open jobs
+  const logisticsOrders = orders.filter(
+    (o) =>
+      o.status !== 'requested' &&
+      (isAdminView || !o.logisticsPartnerId || o.logisticsPartnerId === currentUser?.id)
+  );
+
   const handleAdvanceStatus = (orderId: string, nextStatus: OrderStatus, noteText?: string) => {
-    StrawSyncStore.updateOrderStatus(orderId, nextStatus, noteText);
+    if (nextStatus === 'delivered') {
+      const res = StrawSyncStore.markOrderDelivered(orderId, { notes: noteText });
+      if (!res.success) {
+        setUpdateMsg(res.error);
+        setTimeout(() => setUpdateMsg(''), 4000);
+        return;
+      }
+      setUpdateMsg(`Shipment #${res.order.orderNumber} marked Delivered! Farmer & Buyer notified in real time.`);
+      setTimeout(() => setUpdateMsg(''), 4500);
+      return;
+    }
+
+    const partner =
+      currentUser && currentUser.role === 'logistics'
+        ? { id: currentUser.id, name: currentUser.organization || currentUser.name }
+        : undefined;
+    StrawSyncStore.updateOrderStatus(orderId, nextStatus, noteText, partner);
     setUpdateMsg(`Order status successfully updated to ${nextStatus.toUpperCase().replace(/_/g, ' ')}!`);
     setTimeout(() => setUpdateMsg(''), 4000);
+  };
+
+  const handleBroadcastStepGps = (order: PurchaseOrder) => {
+    const vehicleNumber = (vehicleInputMap[order.id] ?? order.vehicleNumber)?.trim() || undefined;
+    const res = StrawSyncStore.broadcastTruckGps(order.id, {
+      advancePercent: 25,
+      vehicleNumber,
+    });
+    if (!res.success) {
+      setUpdateMsg(res.error);
+    } else {
+      setSelectedOrder(res.order);
+      setUpdateMsg(
+        `GPS Ping Broadcast for #${res.order.orderNumber}: ${res.order.gpsProgressPercent}% route (${res.order.currentTruckCoords?.[0].toFixed(4)}°N, ${res.order.currentTruckCoords?.[1].toFixed(4)}°E)`
+      );
+    }
+    setTimeout(() => setUpdateMsg(''), 4500);
+  };
+
+  const handleBroadcastDeviceGps = (order: PurchaseOrder) => {
+    const vehicleNumber = (vehicleInputMap[order.id] ?? order.vehicleNumber)?.trim() || undefined;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setUpdateMsg('Browser Geolocation unavailable — use Broadcast Live GPS (+25% Route) instead.');
+      setTimeout(() => setUpdateMsg(''), 4500);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const res = StrawSyncStore.broadcastTruckGps(order.id, {
+          coords: [pos.coords.latitude, pos.coords.longitude],
+          vehicleNumber,
+        });
+        if (!res.success) {
+          setUpdateMsg(res.error);
+        } else {
+          setSelectedOrder(res.order);
+          setUpdateMsg(
+            `Device GPS Ping Recorded for #${res.order.orderNumber} (${pos.coords.latitude.toFixed(4)}°N, ${pos.coords.longitude.toFixed(4)}°E)`
+          );
+        }
+        setTimeout(() => setUpdateMsg(''), 4500);
+      },
+      () => {
+        setUpdateMsg('Device GPS permission denied/unavailable — use Broadcast Live GPS (+25% Route) instead.');
+        setTimeout(() => setUpdateMsg(''), 4500);
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
   };
 
   const handleUploadProof = (e: React.FormEvent) => {
     e.preventDefault();
     if (!proofModalOrder) return;
 
-    StrawSyncStore.uploadDeliveryProof(
+    const res = StrawSyncStore.uploadDeliveryProof(
       proofModalOrder.id,
       `https://strawsync.gov.in/slips/${slipNumber}.pdf`,
-      `Verified Weighbridge Slip #${slipNumber} • Gross ${grossWeight}t, Net ${proofModalOrder.quantityTonnes}t`
+      `Verified Weighbridge Slip #${slipNumber} • Gross ${grossWeight}t, Net ${grossWeight}t`,
+      slipNumber,
+      Number(grossWeight) || proofModalOrder.quantityTonnes
     );
-    setUpdateMsg(`Delivery proof slip #${slipNumber} successfully uploaded and verified with buyer facility!`);
+    if (!res.success) {
+      setUpdateMsg(res.error);
+      setTimeout(() => setUpdateMsg(''), 4500);
+      return;
+    }
+    setUpdateMsg(
+      `Delivery proof slip #${slipNumber} uploaded and marked Delivered! Farmer & Buyer notified in real time.`
+    );
     setProofModalOrder(null);
-    setTimeout(() => setUpdateMsg(''), 4000);
+    setTimeout(() => setUpdateMsg(''), 4500);
   };
 
-  const filteredOrders = orders.filter((o) => {
+  const filteredOrders = logisticsOrders.filter((o) => {
     if (statusFilter === 'active') return o.status !== 'settled' && o.status !== 'cancelled';
     if (statusFilter === 'completed') return o.status === 'settled' || o.status === 'delivered';
     return true;
   });
 
-  const totalHaulageEarnings = orders.reduce((sum, o) => sum + o.logisticsTotalPayout, 0);
-  const activeDispatches = orders.filter((o) => o.status !== 'settled' && o.status !== 'cancelled');
+  const totalHaulageEarnings = logisticsOrders
+    .filter((o) => o.status !== 'cancelled')
+    .reduce((sum, o) => sum + o.logisticsTotalPayout, 0);
+  const activeDispatches = logisticsOrders.filter((o) => o.status !== 'settled' && o.status !== 'cancelled');
 
   return (
     <DashboardLayout role="logistics" title="Smart Logistics Fleet Dispatch">
@@ -100,19 +180,31 @@ export default function LogisticsDashboardPage() {
               🚛
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-bold text-charcoal">
-                  Smart Rural Logistics Fleet — {currentUser?.organization || 'Khalsa Agro Transport'}
+                  {isAdminView
+                    ? 'Logistics Dispatch Command — All Fleet Corridors'
+                    : `Smart Rural Logistics Fleet — ${currentUser?.organization || currentUser?.name || 'Logistics Fleet'}`}
                 </h1>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 text-xs font-bold border border-amber-200">
-                  GPS & Weighbridge Integrated
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                  isAdminView
+                    ? 'bg-purple-50 text-purple-800 border-purple-200'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                }`}>
+                  {isAdminView ? 'Admin Oversight View' : 'GPS & Weighbridge Integrated'}
                 </span>
               </div>
               <p className="text-xs text-charcoal-muted mt-1 flex items-center gap-2">
                 <MapPin className="w-3.5 h-3.5 text-amber-700" />
-                <span>Base Hub: {currentUser?.location || 'GT Road Bypass, Karnal, Haryana'}</span>
-                <span>•</span>
-                <span>Fleet Manager: {currentUser?.name || 'Harpreet Singh'}</span>
+                {isAdminView ? (
+                  <span>Platform-wide haulage dispatches & weighbridge tracking (Inspector: {currentUser?.name})</span>
+                ) : (
+                  <>
+                    <span>Base Hub: {currentUser?.location || 'Registered Fleet Hub'}</span>
+                    <span>•</span>
+                    <span>Fleet Manager: {currentUser?.name}</span>
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -183,21 +275,38 @@ export default function LogisticsDashboardPage() {
 
         {/* Route Map */}
         <div className="bg-white rounded-3xl p-6 sm:p-8 border border-earth-border shadow-subtle space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-lg font-bold text-charcoal">
-                Active Stubble Transport Corridors & Dispatches
+                Active Stubble Transport Corridors &amp; Dispatches
               </h2>
               <p className="text-xs text-charcoal-muted">
                 Live farmgate-to-factory routes with certified haulage distance calculations
               </p>
             </div>
-            <span className="text-xs font-bold text-forest bg-sage px-3 py-1 rounded-full border border-forest-100">
-              {activeDispatches.length} Trucks En Route
-            </span>
+            <div className="flex items-center gap-2">
+              {selectedOrder && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrder(null)}
+                  className="text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-1 rounded-full border border-amber-200 transition"
+                >
+                  Showing #{selectedOrder.orderNumber} • Reset View
+                </button>
+              )}
+              <span className="text-xs font-bold text-forest bg-sage px-3 py-1 rounded-full border border-forest-100">
+                {activeDispatches.length} Trucks En Route
+              </span>
+            </div>
           </div>
 
-          <MapComponent orders={orders} height="360px" zoom={8} center={{ lat: 29.8, lng: 76.5 }} />
+          <MapComponent
+            orders={logisticsOrders}
+            trackedOrder={selectedOrder}
+            height="360px"
+            zoom={8}
+            center={{ lat: 29.8, lng: 76.5 }}
+          />
         </div>
 
         {/* Assigned Dispatches List */}
@@ -222,7 +331,7 @@ export default function LogisticsDashboardPage() {
                     : 'bg-white text-charcoal border border-earth-border hover:bg-sand'
                 }`}
               >
-                All ({orders.length})
+                All ({logisticsOrders.length})
               </button>
               <button
                 onClick={() => setStatusFilter('active')}
@@ -242,13 +351,18 @@ export default function LogisticsDashboardPage() {
                     : 'bg-white text-charcoal border border-earth-border hover:bg-sand'
                 }`}
               >
-                Completed ({orders.filter((o) => o.status === 'settled' || o.status === 'delivered').length})
+                Completed ({logisticsOrders.filter((o) => o.status === 'settled' || o.status === 'delivered').length})
               </button>
             </div>
           </div>
 
           <div className="space-y-4">
-            {filteredOrders.map((order) => (
+            {filteredOrders.length === 0 ? (
+              <div className="bg-white rounded-3xl p-8 text-center border border-earth-border text-xs text-charcoal-muted">
+                No confirmed transport dispatches in this view yet.
+              </div>
+            ) : (
+            filteredOrders.map((order) => (
               <div
                 key={order.id}
                 className="bg-white rounded-3xl p-6 border border-earth-border shadow-subtle space-y-5"
@@ -263,7 +377,10 @@ export default function LogisticsDashboardPage() {
                         {order.status.replace(/_/g, ' ')}
                       </span>
                       <span className="text-xs text-charcoal-muted">
-                        • {order.cropType.toUpperCase()} ({order.quantityTonnes} tonnes)
+                        • {order.cropType.toUpperCase()} ({formatWeight(order.displayQuantity ?? order.quantityTonnes, order.weightUnit)})
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-forest border border-forest-200">
+                        GPS {order.gpsProgressPercent ?? 0}%
                       </span>
                     </div>
 
@@ -312,11 +429,52 @@ export default function LogisticsDashboardPage() {
 
                 {/* Controls */}
                 <div className="pt-2 border-t border-earth-border flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="text-charcoal-muted">
-                    Assigned Vehicle: <strong>{order.vehicleType}</strong>
+                  <div className="flex flex-wrap items-center gap-2 text-charcoal-muted">
+                    <span>
+                      Vehicle: <strong>{order.vehicleType}</strong>
+                    </span>
+                    <input
+                      type="text"
+                      value={vehicleInputMap[order.id] ?? order.vehicleNumber ?? ''}
+                      onChange={(e) =>
+                        setVehicleInputMap((prev) => ({ ...prev, [order.id]: e.target.value }))
+                      }
+                      placeholder="PB-13-TR-4421"
+                      className="w-32 px-2 py-1 rounded-lg bg-sand border border-earth-border text-[11px] font-mono font-bold text-charcoal focus:outline-none focus:border-forest"
+                    />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {order.status !== 'delivered' &&
+                      order.status !== 'settled' &&
+                      order.status !== 'cancelled' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleBroadcastStepGps(order)}
+                            className="px-3 py-2 bg-forest hover:bg-forest-700 text-white rounded-xl font-bold transition flex items-center gap-1"
+                          >
+                            <Navigation className="w-3.5 h-3.5" />
+                            <span>Broadcast Live GPS (+25% Route)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBroadcastDeviceGps(order)}
+                            className="px-3 py-2 bg-white border border-earth-border hover:border-forest text-charcoal rounded-xl font-bold transition"
+                          >
+                            Use Device GPS
+                          </button>
+                        </>
+                      )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedOrder(selectedOrder?.id === order.id ? null : order)
+                      }
+                      className="px-3 py-2 bg-sand hover:bg-forest-50 border border-earth-border text-charcoal rounded-xl font-bold transition"
+                    >
+                      {selectedOrder?.id === order.id ? 'Unfocus Map' : 'Focus GPS Map'}
+                    </button>
                     {order.status === 'accepted' && (
                       <button
                         onClick={() => handleAdvanceStatus(order.id, 'logistics_assigned', 'Driver & Vehicle Allocated')}
@@ -355,10 +513,10 @@ export default function LogisticsDashboardPage() {
 
                     {order.status === 'in_transit' && (
                       <button
-                        onClick={() => handleAdvanceStatus(order.id, 'delivered', 'Gate Entry Complete. Quality Tested.')}
+                        onClick={() => handleAdvanceStatus(order.id, 'delivered', 'Gate Entry Complete. Unloaded & Delivered at Buyer Plant.')}
                         className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold transition"
                       >
-                        Confirm Factory Gate Entry & Unload
+                        Mark Delivered
                       </button>
                     )}
 
@@ -379,12 +537,25 @@ export default function LogisticsDashboardPage() {
                     )}
 
                     {order.status === 'delivered' && (
-                      <button
-                        onClick={() => handleAdvanceStatus(order.id, 'settled', 'Escrow Payment Released')}
-                        className="px-3.5 py-2 bg-forest hover:bg-forest-700 text-white rounded-xl font-bold transition"
-                      >
-                        Release Escrow & Settle Payouts
-                      </button>
+                      isAdminView ? (
+                        <button
+                          onClick={() => {
+                            const res = StrawSyncStore.confirmDeliveryAndReleasePayment(order.id);
+                            setUpdateMsg(
+                              res.success
+                                ? `Admin settled escrow for #${order.orderNumber} (UTR: ${res.transaction.utrNumber}).`
+                                : res.error
+                            );
+                          }}
+                          className="px-3.5 py-2 bg-forest hover:bg-forest-700 text-white rounded-xl font-bold transition"
+                        >
+                          Confirm & Release Escrow (Admin)
+                        </button>
+                      ) : (
+                        <span className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 font-bold">
+                          Delivered • Awaiting Buyer Confirmation
+                        </span>
+                      )
                     )}
 
                     {order.status === 'settled' && (
@@ -396,7 +567,7 @@ export default function LogisticsDashboardPage() {
                   </div>
                 </div>
               </div>
-            ))}
+            )))}
           </div>
         </div>
       </div>

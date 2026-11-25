@@ -19,12 +19,12 @@ import {
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
 import AddDemandModal from '../../../components/AddDemandModal';
-import { ResidueListing, BuyerDemand, PurchaseOrder, MatchResult } from '../../../types';
+import { ResidueListing, BuyerDemand, PurchaseOrder, MatchResult, UserProfile } from '../../../types';
 import { StrawSyncStore } from '../../../lib/store';
 import { findMatchesForDemand } from '../../../lib/engine';
 
 export default function BuyerDashboardPage() {
-  const [currentUser, setCurrentUser] = useState(StrawSyncStore.getCurrentUser());
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [demands, setDemands] = useState<BuyerDemand[]>([]);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
@@ -52,7 +52,13 @@ export default function BuyerDashboardPage() {
     return () => unsubscribe();
   }, [selectedDemandId]);
 
-  const activeDemand = demands.find((d) => d.id === selectedDemandId) || demands[0];
+  const isAdminView = currentUser?.role === 'admin';
+  const buyerDemands = isAdminView
+    ? demands
+    : currentUser
+      ? demands.filter((d) => d.buyerId === currentUser.id)
+      : [];
+  const activeDemand = buyerDemands.find((d) => d.id === selectedDemandId) || buyerDemands[0];
   const matchedResults: MatchResult[] = activeDemand
     ? findMatchesForDemand(activeDemand, listings)
     : [];
@@ -61,13 +67,27 @@ export default function BuyerDashboardPage() {
     const qty = Math.min(match.listing.recoverableTonnes, 35);
     const newOrder = StrawSyncStore.createOrderFromMatch(match, qty);
     setOrderSuccessMsg(
-      `Purchase Order #${newOrder.orderNumber} successfully issued to ${match.listing.farmerName}! Escrow fund allocated.`
+      `Purchase request #${newOrder.orderNumber} sent to ${match.listing.farmerName}! Awaiting farmer approval.`
     );
     setSelectedMatch(null);
     setTimeout(() => setOrderSuccessMsg(''), 5000);
   };
 
-  const buyerOrders = orders.filter((o) => o.buyerName.includes('GreenSource') || true);
+  const handleConfirmDeliveryAndRelease = (orderId: string) => {
+    const res = StrawSyncStore.confirmDeliveryAndReleasePayment(orderId);
+    setOrderSuccessMsg(
+      res.success
+        ? `Delivery confirmed for #${res.order.orderNumber}! ₹${res.transaction.amount.toLocaleString('en-IN')} paid to farmer (UTR: ${res.transaction.utrNumber}).`
+        : res.error
+    );
+    setTimeout(() => setOrderSuccessMsg(''), 6000);
+  };
+
+  const buyerOrders = isAdminView
+    ? orders
+    : currentUser
+      ? orders.filter((o) => o.buyerId === currentUser.id)
+      : [];
 
   return (
     <DashboardLayout role="buyer" title="Biomass Buyer Procurement Dashboard">
@@ -79,19 +99,31 @@ export default function BuyerDashboardPage() {
               🏭
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-bold text-charcoal">
-                  Industrial Procurement — {currentUser?.organization || 'GreenSource Bio-Energy'}
+                  {isAdminView
+                    ? 'Buyer Procurement Hub — All Platform Requisitions'
+                    : `Industrial Procurement — ${currentUser?.organization || currentUser?.name || 'Biomass Buyer'}`}
                 </h1>
-                <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-800 text-xs font-bold border border-blue-200">
-                  CPCB Co-Firing Mandate Active
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                  isAdminView
+                    ? 'bg-purple-50 text-purple-800 border-purple-200'
+                    : 'bg-blue-50 text-blue-800 border-blue-200'
+                }`}>
+                  {isAdminView ? 'Admin Oversight View' : 'CPCB Co-Firing Mandate Active'}
                 </span>
               </div>
               <p className="text-xs text-charcoal-muted mt-1 flex items-center gap-2">
                 <MapPin className="w-3.5 h-3.5 text-blue-700" />
-                <span>{currentUser?.location || 'Panipat Industrial Sector, Haryana'}</span>
-                <span>•</span>
-                <span>Buyer Desk: {currentUser?.name || 'Rajesh Mehra'}</span>
+                {isAdminView ? (
+                  <span>Platform-wide industrial demand & order oversight (Inspector: {currentUser?.name})</span>
+                ) : (
+                  <>
+                    <span>{currentUser?.location || 'Registered Facility'}</span>
+                    <span>•</span>
+                    <span>Buyer Desk: {currentUser?.name}</span>
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -139,12 +171,17 @@ export default function BuyerDashboardPage() {
               </p>
             </div>
             <span className="text-xs font-semibold text-charcoal-muted">
-              {demands.length} Active Targets
+              {buyerDemands.length} Active Targets
             </span>
           </div>
 
+          {buyerDemands.length === 0 ? (
+            <div className="p-6 rounded-2xl bg-sand border border-earth-border text-xs text-charcoal-muted text-center">
+              No procurement requisitions posted yet. Click &ldquo;Post Biomass Demand&rdquo; above or browse open farmgate lots in the marketplace.
+            </div>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {demands.map((d) => (
+            {buyerDemands.map((d) => (
               <button
                 key={d.id}
                 onClick={() => setSelectedDemandId(d.id)}
@@ -161,7 +198,7 @@ export default function BuyerDashboardPage() {
                   </span>
                 </div>
                 <div className="text-lg font-bold text-blue-900">
-                  {d.requiredTonnes - d.fulfilledTonnes}{' '}
+                  {Math.max(0, Number((d.requiredTonnes - d.fulfilledTonnes).toFixed(1)))}{' '}
                   <span className="text-xs font-normal text-charcoal-muted">tonnes remaining</span>
                 </div>
                 <div className="text-[11px] text-charcoal-muted mt-1 flex justify-between">
@@ -171,6 +208,7 @@ export default function BuyerDashboardPage() {
               </button>
             ))}
           </div>
+          )}
         </div>
 
         {/* Matches Spotlight */}
@@ -312,6 +350,77 @@ export default function BuyerDashboardPage() {
             )}
           </div>
         )}
+        {/* Recent Buyer Purchase Requests & Orders */}
+        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-earth-border shadow-subtle space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-charcoal">
+                Purchase Requests & Inbound Feedstock Orders ({buyerOrders.length})
+              </h2>
+              <p className="text-xs text-charcoal-muted">
+                Real-time farmer approval and dispatch status for your procurement orders
+              </p>
+            </div>
+            <Link
+              href="/buyer/orders"
+              className="text-xs font-bold text-blue-800 hover:underline flex items-center gap-1"
+            >
+              <span>View All Orders</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
+          {buyerOrders.length === 0 ? (
+            <div className="p-5 rounded-2xl bg-sand border border-earth-border text-xs text-charcoal-muted text-center">
+              No purchase requests sent yet. Send a request from a matched lot above or browse the open marketplace.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {buyerOrders.slice(0, 4).map((o) => (
+                <div
+                  key={o.id}
+                  className="p-4 rounded-2xl bg-sand border border-earth-border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-charcoal">#{o.orderNumber}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                        o.status === 'requested'
+                          ? 'bg-amber-100 text-amber-800'
+                          : o.status === 'cancelled'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {o.status === 'requested' ? 'Pending Farmer Approval' : o.status.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <div className="text-charcoal-muted mt-0.5">
+                      Farmer: <strong>{o.farmerName}</strong> • {o.quantityTonnes}t {o.cropType.toUpperCase()}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {o.status === 'delivered' && o.paymentStatus !== 'settled' && (
+                      <button
+                        onClick={() => handleConfirmDeliveryAndRelease(o.id)}
+                        className="px-3.5 py-2 bg-forest hover:bg-forest-700 text-white rounded-xl text-[11px] font-bold shadow-subtle transition"
+                      >
+                        Confirm Delivery & Release Payment
+                      </button>
+                    )}
+                    {o.paymentStatus === 'settled' && o.utrNumber && (
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-forest-200 text-[10px] font-bold text-forest">
+                        Settled ({o.utrNumber})
+                      </span>
+                    )}
+                    <div className="text-right font-bold text-forest">
+                      ₹{o.buyerTotalBill.toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <AddDemandModal

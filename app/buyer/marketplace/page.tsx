@@ -4,46 +4,89 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   Search,
-  Filter,
   MapPin,
   ArrowRight,
-  ShoppingBag,
   ArrowLeft,
   CheckCircle2,
-  SlidersHorizontal,
-  Flame,
-  Award
+  Wheat,
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
-import { ResidueListing, BuyerDemand, PurchaseOrder } from '../../../types';
-import { StrawSyncStore } from '../../../lib/store';
+import { ResidueListing, BuyerDemand, UserProfile, WeightUnit } from '../../../types';
+import {
+  StrawSyncStore,
+  formatWeight,
+  formatUnitPrice,
+  fromTonnes,
+  toTonnes,
+} from '../../../lib/store';
 
 export default function BuyerMarketplacePage() {
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [demands, setDemands] = useState<BuyerDemand[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [cropFilter, setCropFilter] = useState<string>('all');
-  const [maxPriceFilter, setMaxPriceFilter] = useState<number>(3000);
-  const [maxMoistureFilter, setMaxMoistureFilter] = useState<number>(25);
+  const [maxPriceFilter, setMaxPriceFilter] = useState<number>(50000);
+  const [maxMoistureFilter, setMaxMoistureFilter] = useState<number>(100);
+  const [requestQtyMap, setRequestQtyMap] = useState<Record<string, string>>({});
   const [successMsg, setSuccessMsg] = useState('');
 
   useEffect(() => {
+    setCurrentUser(StrawSyncStore.getCurrentUser());
     setListings(StrawSyncStore.getListings());
     setDemands(StrawSyncStore.getDemands());
 
     const unsubscribe = StrawSyncStore.subscribe(() => {
+      setCurrentUser(StrawSyncStore.getCurrentUser());
       setListings(StrawSyncStore.getListings());
       setDemands(StrawSyncStore.getDemands());
     });
     return () => unsubscribe();
   }, []);
 
+  const getSelectedQty = (listing: ResidueListing): { rawQty: number; unit: WeightUnit; tonnes: number } => {
+    const unit: WeightUnit = listing.weightUnit || 'tonne';
+    const availableInUnit =
+      listing.originalQuantity !== undefined
+        ? listing.originalQuantity
+        : fromTonnes(listing.recoverableTonnes, unit);
+    const defaultRaw =
+      unit === 'tonne'
+        ? Math.min(availableInUnit, 30)
+        : availableInUnit;
+
+    const typed = requestQtyMap[listing.id];
+    const parsed = typed !== undefined && typed !== '' ? Number(typed) : defaultRaw;
+    const clampedRaw = Math.min(
+      availableInUnit,
+      Math.max(unit === 'kg' ? 10 : 0.1, Number.isFinite(parsed) && parsed > 0 ? parsed : defaultRaw)
+    );
+    const tonnes = Math.min(
+      listing.recoverableTonnes,
+      Math.max(0.01, toTonnes(clampedRaw, unit))
+    );
+    return { rawQty: clampedRaw, unit, tonnes };
+  };
+
   const handleRequestLot = (listing: ResidueListing) => {
-    const activeDemand = demands[0] || {
+    if (listing.recoverableTonnes <= 0) return;
+
+    const { rawQty, unit, tonnes } = getSelectedQty(listing);
+    const myDemands = currentUser
+      ? demands.filter((d) => d.buyerId === currentUser.id)
+      : demands;
+    const activeDemand = myDemands[0] || {
       id: 'dem-instant',
-      buyerId: 'user-buyer-1',
-      companyName: 'GreenSource Bio-Energy Pellets',
-      plantLocation: { district: 'Panipat', state: 'Haryana', coordinates: { lat: 29.3909, lng: 76.9635 } },
+      buyerId: currentUser?.id || 'user-buyer-1',
+      companyName:
+        currentUser?.organization ||
+        currentUser?.name ||
+        'GreenSource Bio-Energy Pellets Pvt Ltd',
+      plantLocation: {
+        district: currentUser?.location?.split(',')[0]?.trim() || 'Panipat',
+        state: 'Haryana',
+        coordinates: currentUser?.coordinates || { lat: 29.3909, lng: 76.9635 },
+      },
       maxDeliveredPricePerTonne: 2400,
     };
 
@@ -53,7 +96,7 @@ export default function BuyerMarketplacePage() {
         listingId: listing.id,
         demandId: activeDemand.id,
         listing,
-        demand: activeDemand as any,
+        demand: activeDemand as BuyerDemand,
         matchScore: 88,
         distanceKm: 54,
         recommendedVehicle: {
@@ -68,19 +111,29 @@ export default function BuyerMarketplacePage() {
         farmgatePricePerTonne: listing.expectedPricePerTonne,
         estimatedDeliveredPricePerTonne: listing.expectedPricePerTonne + 420,
         buyerMarginPerTonne: 200,
-        totalDeliveredCost: (listing.expectedPricePerTonne + 420) * 30,
-        breakdown: { distanceScore: 26, quantityScore: 22, priceViabilityScore: 22, qualityScore: 18, totalScore: 88, reasons: ['Direct marketplace order'] },
-        co2SavedKg: 42000,
+        totalDeliveredCost: (listing.expectedPricePerTonne + 420) * tonnes,
+        breakdown: {
+          distanceScore: 26,
+          quantityScore: 22,
+          priceViabilityScore: 22,
+          qualityScore: 18,
+          totalScore: 88,
+          reasons: ['Direct marketplace order'],
+        },
+        co2SavedKg: Math.round(tonnes * 1400),
       },
-      Math.min(listing.recoverableTonnes, 30)
+      tonnes,
+      { weightUnit: unit, displayQuantity: rawQty }
     );
 
-    setSuccessMsg(`Order #${newOrder.orderNumber} successfully issued for ${listing.farmerName}'s lot! Escrow secured.`);
+    setSuccessMsg(
+      `Purchase request #${newOrder.orderNumber} (${formatWeight(rawQty, unit)}) sent to ${listing.farmerName}! Awaiting farmer approval.`
+    );
     setTimeout(() => setSuccessMsg(''), 5000);
   };
 
   const filteredListings = listings.filter((l) => {
-    if (l.status === 'sold') return false;
+    if (l.status === 'sold' || l.recoverableTonnes <= 0) return false;
     if (cropFilter !== 'all' && l.cropType !== cropFilter) return false;
     if (l.expectedPricePerTonne > maxPriceFilter) return false;
     if (l.moisturePercentage > maxMoistureFilter) return false;
@@ -97,7 +150,7 @@ export default function BuyerMarketplacePage() {
   });
 
   return (
-    <DashboardLayout role="buyer" title="Biomass Marketplace">
+    <DashboardLayout role="buyer" title="Biomass & Farm Produce Marketplace">
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -109,10 +162,10 @@ export default function BuyerMarketplacePage() {
               <span>Back to Dashboard</span>
             </Link>
             <h1 className="text-2xl font-bold text-charcoal mt-1">
-              Browse Open Market Agricultural Residue
+              Browse Open Market Residue &amp; Fresh Farm Produce
             </h1>
             <p className="text-xs text-charcoal-muted">
-              Live farmgate listings verified across Punjab, Haryana, UP & Rajasthan
+              Live verified farmgate listings across Punjab, Haryana, UP &amp; Rajasthan
             </p>
           </div>
 
@@ -120,7 +173,7 @@ export default function BuyerMarketplacePage() {
             <Search className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
             <input
               type="text"
-              placeholder="Search by farmer, district, village..."
+              placeholder="Search by farmer, district, produce..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
@@ -144,30 +197,43 @@ export default function BuyerMarketplacePage() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-white rounded-2xl border border-earth-border text-xs shadow-subtle">
           <div>
             <label className="block text-[10px] font-bold text-charcoal-muted uppercase mb-1">
-              Crop Filter
+              Produce / Crop Filter
             </label>
             <select
               value={cropFilter}
               onChange={(e) => setCropFilter(e.target.value)}
               className="w-full px-3 py-1.5 bg-sand border border-earth-border rounded-lg text-xs font-semibold text-charcoal"
             >
-              <option value="all">All Crops (Paddy, Wheat, Mustard...)</option>
-              <option value="paddy">Paddy Straw (Parali)</option>
-              <option value="wheat">Wheat Straw (Bhusa)</option>
-              <option value="mustard">Mustard Stalk & Husk</option>
-              <option value="sugarcane">Sugarcane Bagasse</option>
+              <option value="all">All Biomass &amp; Produce Lots</option>
+              <optgroup label="Crop Residue">
+                <option value="paddy">Paddy Straw (Parali)</option>
+                <option value="wheat">Wheat Straw (Bhusa)</option>
+                <option value="mustard">Mustard Stalk &amp; Husk</option>
+                <option value="sugarcane">Sugarcane Bagasse</option>
+                <option value="cotton">Cotton Stalks</option>
+                <option value="maize">Maize Stover &amp; Cobs</option>
+                <option value="agri_waste">Organic Agri-Waste</option>
+              </optgroup>
+              <optgroup label="Fresh Vegetables &amp; Fruits">
+                <option value="vegetables">Fresh Vegetables Lot</option>
+                <option value="fruits">Seasonal Fruits Lot</option>
+                <option value="orchard">Orchard Produce</option>
+              </optgroup>
             </select>
           </div>
 
           <div>
             <label className="block text-[10px] font-bold text-charcoal-muted uppercase mb-1">
-              Max Farmgate Rate: ₹{maxPriceFilter}/tonne
+              Max Farmgate Rate:{' '}
+              {maxPriceFilter >= 50000
+                ? 'Any (up to ₹50,000/t)'
+                : `₹${maxPriceFilter.toLocaleString('en-IN')}/tonne`}
             </label>
             <input
               type="range"
               min="1000"
-              max="3500"
-              step="100"
+              max="50000"
+              step="500"
               value={maxPriceFilter}
               onChange={(e) => setMaxPriceFilter(Number(e.target.value))}
               className="w-full accent-forest cursor-pointer"
@@ -176,13 +242,14 @@ export default function BuyerMarketplacePage() {
 
           <div>
             <label className="block text-[10px] font-bold text-charcoal-muted uppercase mb-1">
-              Max Moisture Content: {maxMoistureFilter}%
+              Max Moisture Content:{' '}
+              {maxMoistureFilter >= 100 ? 'Any (up to 100%)' : `${maxMoistureFilter}%`}
             </label>
             <input
               type="range"
               min="8"
-              max="30"
-              step="1"
+              max="100"
+              step="2"
               value={maxMoistureFilter}
               onChange={(e) => setMaxMoistureFilter(Number(e.target.value))}
               className="w-full accent-forest cursor-pointer"
@@ -192,63 +259,131 @@ export default function BuyerMarketplacePage() {
 
         {/* Listings Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredListings.map((listing) => (
-            <div
-              key={listing.id}
-              className="p-5 rounded-3xl bg-white border border-earth-border hover:border-forest-300 shadow-subtle transition flex flex-col justify-between"
-            >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-50 text-forest border border-forest-100">
-                    {listing.cropName}
-                  </span>
-                  <span className="text-sm font-bold text-charcoal">
-                    ₹{listing.expectedPricePerTonne}/t
-                  </span>
-                </div>
+          {filteredListings.map((listing) => {
+            const unit: WeightUnit = listing.weightUnit || 'tonne';
+            const availableDisplay = formatWeight(
+              listing.originalQuantity ?? listing.recoverableTonnes,
+              unit
+            );
+            const selected = getSelectedQty(listing);
 
-                <div>
-                  <h4 className="text-base font-bold text-charcoal">
-                    {listing.farmerName}
-                  </h4>
-                  <p className="text-xs text-charcoal-muted flex items-center gap-1 mt-0.5">
-                    <MapPin className="w-3.5 h-3.5 text-forest" />
-                    <span>{listing.village}, {listing.district} ({listing.state})</span>
-                  </p>
-                </div>
+            return (
+              <div
+                key={listing.id}
+                className="p-5 rounded-3xl bg-white border border-earth-border hover:border-forest-300 shadow-subtle transition flex flex-col justify-between"
+              >
+                <div className="space-y-3">
+                  {listing.imageUrl ? (
+                    <img
+                      src={listing.imageUrl}
+                      alt={listing.cropName}
+                      className="w-full h-36 object-cover rounded-2xl border border-earth-border bg-sand"
+                    />
+                  ) : (
+                    <div className="w-full h-20 rounded-2xl bg-emerald-50/70 border border-forest-100 flex items-center justify-center gap-2 text-xs font-semibold text-forest">
+                      <Wheat className="w-4 h-4" />
+                      <span className="capitalize">
+                        {(listing.category || 'crop_residue').replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                  )}
 
-                <div className="p-3 rounded-2xl bg-sand border border-earth-border text-xs grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[10px] text-charcoal-muted block">Available Biomass</span>
-                    <span className="font-bold text-forest text-sm">{listing.recoverableTonnes} Tonnes</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-50 text-forest border border-forest-100">
+                      {listing.cropName}
+                    </span>
+                    <div className="text-right shrink-0">
+                      <span className="text-sm font-bold text-charcoal block">
+                        {unit !== 'tonne' && listing.pricePerUnit !== undefined
+                          ? formatUnitPrice(listing.pricePerUnit, unit)
+                          : `₹${listing.expectedPricePerTonne}/t`}
+                      </span>
+                      {unit !== 'tonne' && (
+                        <span className="text-[10px] text-charcoal-muted">
+                          ₹{listing.expectedPricePerTonne.toLocaleString('en-IN')}/t
+                        </span>
+                      )}
+                    </div>
                   </div>
+
                   <div>
-                    <span className="text-[10px] text-charcoal-muted block">Moisture & Form</span>
-                    <span className="font-semibold text-charcoal">{listing.moisturePercentage}% ({listing.baleType})</span>
+                    <h4 className="text-base font-bold text-charcoal">
+                      {listing.farmerName}
+                    </h4>
+                    <p className="text-xs text-charcoal-muted flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3.5 h-3.5 text-forest" />
+                      <span>
+                        {listing.village}, {listing.district} ({listing.state})
+                      </span>
+                    </p>
                   </div>
+
+                  <div className="p-3 rounded-2xl bg-sand border border-earth-border text-xs grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[10px] text-charcoal-muted block">Available Lot</span>
+                      <span className="font-bold text-forest text-sm">{availableDisplay}</span>
+                      {unit !== 'tonne' && (
+                        <span className="text-[10px] text-charcoal-muted block">
+                          ({listing.recoverableTonnes} Tonnes)
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-charcoal-muted block">Moisture &amp; Form</span>
+                      <span className="font-semibold text-charcoal">
+                        {listing.moisturePercentage}% ({listing.baleType})
+                      </span>
+                    </div>
+                  </div>
+
+                  {listing.notes && (
+                    <p className="text-[11px] text-charcoal-muted italic line-clamp-2">
+                      &ldquo;{listing.notes}&rdquo;
+                    </p>
+                  )}
                 </div>
 
-                {listing.notes && (
-                  <p className="text-[11px] text-charcoal-muted italic line-clamp-2">
-                    "{listing.notes}"
-                  </p>
-                )}
-              </div>
+                <div className="mt-4 pt-3 border-t border-earth-border space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <label className="text-[11px] font-semibold text-charcoal-muted">
+                      Order Qty ({unit}):
+                    </label>
+                    <input
+                      type="number"
+                      min={unit === 'kg' ? 10 : 0.1}
+                      max={
+                        listing.originalQuantity ??
+                        fromTonnes(listing.recoverableTonnes, unit)
+                      }
+                      step="any"
+                      value={requestQtyMap[listing.id] ?? String(selected.rawQty)}
+                      onChange={(e) =>
+                        setRequestQtyMap((prev) => ({
+                          ...prev,
+                          [listing.id]: e.target.value,
+                        }))
+                      }
+                      className="w-24 px-2.5 py-1 rounded-lg bg-sand border border-earth-border text-xs font-bold text-charcoal text-right focus:outline-none focus:border-forest"
+                    />
+                  </div>
 
-              <div className="mt-4 pt-3 border-t border-earth-border flex items-center justify-between">
-                <span className="text-[11px] text-charcoal-muted">
-                  Ready: {listing.collectionStartDate}
-                </span>
-                <button
-                  onClick={() => handleRequestLot(listing)}
-                  className="px-4 py-2 bg-blue-800 hover:bg-blue-900 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
-                >
-                  <span>Request Lot</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-charcoal-muted">
+                      Ready: {listing.collectionStartDate}
+                    </span>
+                    <button
+                      onClick={() => handleRequestLot(listing)}
+                      disabled={listing.recoverableTonnes <= 0 || listing.status === 'sold'}
+                      className="px-4 py-2 bg-blue-800 hover:bg-blue-900 disabled:bg-charcoal-muted/40 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
+                    >
+                      <span>Request Purchase</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </DashboardLayout>

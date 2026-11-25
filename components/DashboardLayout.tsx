@@ -18,8 +18,6 @@ import {
   Menu,
   X,
   ArrowLeft,
-  AlertTriangle,
-  UserCheck
 } from 'lucide-react';
 import { StrawSyncStore } from '../lib/store';
 import { UserProfile, UserRole } from '../types';
@@ -65,28 +63,23 @@ export default function DashboardLayout({ role, title, subtitle, children }: Pro
 
   useEffect(() => {
     setIsMounted(true);
-    const user = StrawSyncStore.getCurrentUser();
-    setCurrentUser(user);
 
-    if (!user) {
-      router.replace('/login');
-      return;
-    }
+    const enforceRoleAccess = () => {
+      const user = StrawSyncStore.getCurrentUser();
+      setCurrentUser(user);
 
-    if (user.role !== 'admin' && user.role !== role) {
-      router.replace(`/${user.role}/dashboard`);
-      return;
-    }
-
-    const unsubscribe = StrawSyncStore.subscribe(() => {
-      const u = StrawSyncStore.getCurrentUser();
-      setCurrentUser(u);
-      if (!u) {
+      if (!user) {
         router.replace('/login');
-      } else if (u.role !== 'admin' && u.role !== role) {
-        router.replace(`/${u.role}/dashboard`);
+        return;
       }
-    });
+
+      if (user.role !== 'admin' && user.role !== role) {
+        router.replace(`/${user.role}/dashboard`);
+      }
+    };
+
+    enforceRoleAccess();
+    const unsubscribe = StrawSyncStore.subscribe(enforceRoleAccess);
     return () => unsubscribe();
   }, [role, router]);
 
@@ -95,7 +88,8 @@ export default function DashboardLayout({ role, title, subtitle, children }: Pro
     router.push('/login');
   };
 
-  const hasAccess = !currentUser || currentUser.role === 'admin' || currentUser.role === role;
+  const hasAccess = Boolean(isMounted && currentUser && (currentUser.role === 'admin' || currentUser.role === role));
+  const isAdminOversightView = Boolean(currentUser && currentUser.role === 'admin' && role !== 'admin');
 
   const getRoleHeader = () => {
     switch (role) {
@@ -113,6 +107,20 @@ export default function DashboardLayout({ role, title, subtitle, children }: Pro
   const roleMeta = getRoleHeader();
   const RoleIcon = roleMeta.icon;
   const items = ROLE_ITEMS[role] || [];
+
+  if (!hasAccess) {
+    return (
+      <div className="min-h-[75vh] bg-sand flex items-center justify-center p-6">
+        <div className="bg-white rounded-3xl px-8 py-6 border border-earth-border shadow-subtle text-center space-y-2">
+          <div className="w-10 h-10 rounded-xl bg-sage text-forest flex items-center justify-center mx-auto">
+            <RoleIcon className="w-5 h-5" />
+          </div>
+          <p className="text-xs font-bold text-charcoal">Verifying {roleMeta.label} access...</p>
+          <p className="text-[11px] text-charcoal-muted">Redirecting to your authorized workspace</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-sand flex flex-col md:flex-row">
@@ -223,34 +231,21 @@ export default function DashboardLayout({ role, title, subtitle, children }: Pro
 
       {/* Main Content Area */}
       <main className="flex-1 w-full min-w-0 p-4 sm:p-6 lg:p-8">
-        {/* Role Access Guard Alert if user's role does not match */}
-        {isMounted && currentUser && !hasAccess && (
-          <div className="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-subtle">
+        {isAdminOversightView && (
+          <div className="mb-6 p-4 rounded-2xl bg-purple-50 border border-purple-200 text-xs text-purple-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-subtle">
             <div className="flex items-center gap-2.5">
-              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+              <ShieldCheck className="w-5 h-5 text-purple-700 shrink-0" />
               <div>
-                <span className="font-bold">Role Notification:</span> You are currently viewing this page with role{' '}
-                <strong className="capitalize">{currentUser.role}</strong>. This portal is configured for{' '}
-                <strong className="capitalize">{role}</strong>.
+                <span className="font-bold">Admin Oversight Mode:</span> Viewing platform-wide{' '}
+                <strong className="capitalize">{role}</strong> operations as <strong>{currentUser?.name}</strong>.
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => {
-                  StrawSyncStore.switchRole(role);
-                  router.refresh();
-                }}
-                className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded-lg font-bold"
-              >
-                Switch to {role.toUpperCase()}
-              </button>
-              <button
-                onClick={() => router.push(`/${currentUser.role}/dashboard`)}
-                className="px-3 py-1.5 bg-white border border-amber-300 text-amber-800 rounded-lg font-bold"
-              >
-                My Dashboard
-              </button>
-            </div>
+            <Link
+              href="/admin/dashboard"
+              className="px-3 py-1.5 bg-purple-800 hover:bg-purple-900 text-white rounded-lg font-bold shrink-0 text-center"
+            >
+              Return to Admin Command
+            </Link>
           </div>
         )}
 

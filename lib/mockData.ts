@@ -16,6 +16,7 @@ export const INITIAL_USERS: UserProfile[] = [
     location: 'Dhuri Village, Sangrur, Punjab',
     coordinates: { lat: 30.3742, lng: 75.8712 },
     isVerified: true,
+    password: 'Demo@1234',
   },
   {
     id: 'user-buyer-1',
@@ -27,6 +28,7 @@ export const INITIAL_USERS: UserProfile[] = [
     location: 'Samalkha Industrial Area, Panipat, Haryana',
     coordinates: { lat: 29.2384, lng: 76.9936 },
     isVerified: true,
+    password: 'Demo@1234',
   },
   {
     id: 'user-logistics-1',
@@ -38,6 +40,7 @@ export const INITIAL_USERS: UserProfile[] = [
     location: 'GT Road Bypass, Karnal, Haryana',
     coordinates: { lat: 29.6857, lng: 76.9905 },
     isVerified: true,
+    password: 'Demo@1234',
   },
   {
     id: 'user-admin-1',
@@ -49,6 +52,7 @@ export const INITIAL_USERS: UserProfile[] = [
     location: 'New Delhi HQ',
     coordinates: { lat: 28.6139, lng: 77.2090 },
     isVerified: true,
+    password: 'Demo@1234',
   },
 ];
 

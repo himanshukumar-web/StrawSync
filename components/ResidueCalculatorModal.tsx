@@ -54,10 +54,13 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
       });
       onClose();
     } else {
-      // Ensure role is farmer and navigate to farmer listing
-      StrawSyncStore.switchRole('farmer');
+      const currentUser = StrawSyncStore.getCurrentUser();
       onClose();
-      router.push(`/farmer/listings?crop=${cropType}&acres=${landAreaAcres}&bale=${baleType}`);
+      if (currentUser && (currentUser.role === 'farmer' || currentUser.role === 'admin')) {
+        router.push(`/farmer/listings?crop=${cropType}&acres=${landAreaAcres}&bale=${baleType}`);
+      } else {
+        router.push('/login');
+      }
     }
   };
 
@@ -163,7 +166,7 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
               </div>
             </div>
 
-            <div className="p-3 bg-white rounded-xl border border-forest-200 bg-forest-50/20">
+            <div className="p-3 rounded-xl border border-forest-200 bg-forest-50/30">
               <div className="flex items-center gap-1.5 text-forest-700 text-[11px] font-semibold mb-1">
                 <CheckCircle2 className="w-3.5 h-3.5 text-forest" />
                 <span>Recoverable Biomass</span>

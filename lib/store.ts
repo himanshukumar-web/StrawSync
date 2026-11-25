@@ -9,6 +9,9 @@ import {
   AdminAuditLog,
   PlatformSettings,
   PlatformNotification,
+  EscrowTransaction,
+  WeightUnit,
+  ListingCategory,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -27,6 +30,7 @@ const STORAGE_KEYS = {
   AUDIT_LOGS: 'strawsync_audit_logs',
   SETTINGS: 'strawsync_settings',
   NOTIFICATIONS: 'strawsync_notifications',
+  TRANSACTIONS: 'strawsync_transactions',
 };
 
 const DEFAULT_SETTINGS: PlatformSettings = {
@@ -77,6 +81,17 @@ const INITIAL_AUDIT_LOGS: AdminAuditLog[] = [
 
 type Listener = () => void;
 const listeners: Set<Listener> = new Set();
+let storageListenerBound = false;
+
+function ensureCrossTabSync() {
+  if (typeof window === 'undefined' || storageListenerBound) return;
+  storageListenerBound = true;
+  window.addEventListener('storage', (event) => {
+    if (!event.key || event.key.startsWith('strawsync_')) {
+      notifyListeners();
+    }
+  });
+}
 
 function notifyListeners() {
   listeners.forEach((listener) => {
@@ -108,9 +123,103 @@ function setToStorage<T>(key: string, value: T): void {
   }
 }
 
+const DEMO_DEFAULT_PASSWORD = 'Demo@1234';
+
+export type AuthResult =
+  | { success: true; user: UserProfile }
+  | { success: false; error: string };
+
+/**
+ * Normalizes emails (lowercase trimmed) and Indian mobile numbers (strips +91 / leading 91 / formatting to 10-digit key).
+ */
+export function normalizeIdentifier(input: string): string {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('@')) {
+    return trimmed.toLowerCase();
+  }
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length > 10 && digits.startsWith('91')) {
+    return digits.slice(-10);
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    return digits.slice(1);
+  }
+  return digits;
+}
+
+/**
+ * Weight unit conversion helpers between Kg, Quintal (100 kg), and Metric Tonne (1000 kg).
+ */
+export function toTonnes(quantity: number, unit: WeightUnit = 'tonne'): number {
+  const safeQty = Math.max(0, Number(quantity) || 0);
+  if (unit === 'kg') return Number((safeQty / 1000).toFixed(3));
+  if (unit === 'quintal') return Number((safeQty / 10).toFixed(2));
+  return Number(safeQty.toFixed(2));
+}
+
+export function fromTonnes(tonnes: number, unit: WeightUnit = 'tonne'): number {
+  const safeTonnes = Math.max(0, Number(tonnes) || 0);
+  if (unit === 'kg') return Math.round(safeTonnes * 1000);
+  if (unit === 'quintal') return Number((safeTonnes * 10).toFixed(1));
+  return Number(safeTonnes.toFixed(2));
+}
+
+export function pricePerUnitToPerTonne(pricePerUnit: number, unit: WeightUnit = 'tonne'): number {
+  const safePrice = Math.max(0, Number(pricePerUnit) || 0);
+  if (unit === 'kg') return Math.round(safePrice * 1000);
+  if (unit === 'quintal') return Math.round(safePrice * 10);
+  return Math.round(safePrice);
+}
+
+export function formatWeight(quantity: number, unit: WeightUnit = 'tonne'): string {
+  const safe = Number(quantity) || 0;
+  if (unit === 'kg') return `${safe.toLocaleString('en-IN')} Kg`;
+  if (unit === 'quintal') return `${safe.toLocaleString('en-IN')} ${safe === 1 ? 'Quintal' : 'Quintals'}`;
+  return `${safe.toLocaleString('en-IN')} ${safe === 1 ? 'Tonne' : 'Tonnes'}`;
+}
+
+export function formatUnitPrice(pricePerUnit: number, unit: WeightUnit = 'tonne'): string {
+  const safe = Math.round(Number(pricePerUnit) || 0);
+  const suffix = unit === 'tonne' ? 't' : unit;
+  return `₹${safe.toLocaleString('en-IN')}/${suffix}`;
+}
+
+function interpolateCoords(
+  pickup: [number, number],
+  drop: [number, number],
+  progressPercent: number
+): [number, number] {
+  const pct = Math.max(0, Math.min(100, progressPercent)) / 100;
+  return [
+    Number((pickup[0] + (drop[0] - pickup[0]) * pct).toFixed(5)),
+    Number((pickup[1] + (drop[1] - pickup[1]) * pct).toFixed(5)),
+  ];
+}
+
+function defaultProgressForStatus(status: OrderStatus): number {
+  switch (status) {
+    case 'logistics_assigned':
+      return 15;
+    case 'pickup_en_route':
+      return 30;
+    case 'loaded_and_weighed':
+      return 50;
+    case 'in_transit':
+      return 70;
+    case 'delivered':
+    case 'settled':
+      return 100;
+    default:
+      return 0;
+  }
+}
+
 export const StrawSyncStore = {
-  // Subscribe to changes
+  // Subscribe to changes (same-tab and cross-tab via storage events)
   subscribe(listener: Listener) {
+    ensureCrossTabSync();
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
@@ -119,10 +228,7 @@ export const StrawSyncStore = {
 
   // Users & Auth
   getCurrentUser(): UserProfile | null {
-    return getFromStorage<UserProfile | null>(
-      STORAGE_KEYS.CURRENT_USER,
-      INITIAL_USERS[0] // Default to demo farmer Sardar Gurpreet Singh for immediate demo readiness
-    );
+    return getFromStorage<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
   },
 
   setCurrentUser(user: UserProfile | null) {
@@ -139,19 +245,49 @@ export const StrawSyncStore = {
     return this.getCurrentUser() !== null;
   },
 
-  login(identifier: string, role: UserRole): UserProfile {
+  login(identifier: string, role: UserRole, password: string = ''): AuthResult {
+    const normId = normalizeIdentifier(identifier);
+    const cleanPassword = password.trim();
+
+    if (!normId) {
+      return { success: false, error: 'Please enter your registered mobile number or email.' };
+    }
+    if (!cleanPassword) {
+      return { success: false, error: 'Please enter your password.' };
+    }
+
     const users = this.getAllUsers();
-    // Match by phone, email, or role
-    const matched = users.find(
-      (u) =>
-        (u.phone.includes(identifier) ||
-          u.email.toLowerCase() === identifier.toLowerCase() ||
-          u.role === role) &&
-        u.role === role
-    ) || INITIAL_USERS.find((u) => u.role === role) || users[0];
+    const matched = users.find((u) => {
+      if (u.role !== role) return false;
+      const phoneKey = normalizeIdentifier(u.phone);
+      const emailKey = normalizeIdentifier(u.email);
+      return (Boolean(phoneKey) && phoneKey === normId) || (Boolean(emailKey) && emailKey === normId);
+    });
+
+    if (!matched) {
+      return {
+        success: false,
+        error: 'No account found with this phone/email for the selected role. Please register first.',
+      };
+    }
+
+    if (matched.status === 'suspended') {
+      return {
+        success: false,
+        error: 'This account has been suspended. Contact an administrator.',
+      };
+    }
+
+    const expectedPassword = matched.password?.trim() || DEMO_DEFAULT_PASSWORD;
+    if (expectedPassword !== cleanPassword) {
+      return {
+        success: false,
+        error: 'Incorrect password. Please try again.',
+      };
+    }
 
     this.setCurrentUser(matched);
-    return matched;
+    return { success: true, user: matched };
   },
 
   hasRoleAccess(requiredRole: UserRole): boolean {
@@ -163,29 +299,78 @@ export const StrawSyncStore = {
 
   switchRole(role: UserRole) {
     const users = this.getAllUsers();
-    const found = users.find((u) => u.role === role) || INITIAL_USERS.find((u) => u.role === role);
+    const found = users.find((u) => u.role === role);
     if (found) {
       this.setCurrentUser(found);
     }
   },
 
   getAllUsers(): UserProfile[] {
-    return getFromStorage<UserProfile[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    const stored = getFromStorage<UserProfile[]>(STORAGE_KEYS.USERS, []);
+    const merged: UserProfile[] = [];
+    const seen = new Set<string>();
+
+    for (const user of stored) {
+      seen.add(user.id);
+      merged.push(user);
+    }
+    for (const seed of INITIAL_USERS) {
+      if (!seen.has(seed.id)) {
+        merged.push(seed);
+      }
+    }
+    return merged;
   },
 
-  registerUser(profileData: Omit<UserProfile, 'id' | 'isVerified'>): UserProfile {
+  register(profileData: Omit<UserProfile, 'id' | 'isVerified'>): AuthResult {
     const users = this.getAllUsers();
     // Admin cannot be registered publicly - enforce safety
     const safeRole: UserRole = profileData.role === 'admin' ? 'farmer' : profileData.role;
 
+    const normPhone = normalizeIdentifier(profileData.phone);
+    const normEmail = normalizeIdentifier(profileData.email);
+    const cleanPassword = (profileData.password || '').trim();
+
+    if (!profileData.name.trim()) {
+      return { success: false, error: 'Please enter your full name.' };
+    }
+    if (!normPhone && !normEmail) {
+      return { success: false, error: 'Please enter a mobile number or email address.' };
+    }
+    if (cleanPassword.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters long.' };
+    }
+
+    const duplicate = users.find((u) => {
+      const existingPhone = normalizeIdentifier(u.phone);
+      const existingEmail = normalizeIdentifier(u.email);
+      return (
+        (Boolean(normPhone) && Boolean(existingPhone) && existingPhone === normPhone) ||
+        (Boolean(normEmail) && Boolean(existingEmail) && existingEmail === normEmail)
+      );
+    });
+
+    if (duplicate) {
+      return {
+        success: false,
+        error: 'An account with this phone number or email already exists.',
+      };
+    }
+
     const newUser: UserProfile = {
       ...profileData,
+      name: profileData.name.trim(),
+      phone: normPhone,
+      email: normEmail,
+      location: profileData.location.trim(),
+      password: cleanPassword,
       role: safeRole,
       id: `user-${Date.now()}`,
       isVerified: true,
       status: 'active',
       createdAt: new Date().toISOString(),
     };
+
     users.push(newUser);
     setToStorage(STORAGE_KEYS.USERS, users);
     this.setCurrentUser(newUser);
@@ -201,7 +386,7 @@ export const StrawSyncStore = {
     });
 
     notifyListeners();
-    return newUser;
+    return { success: true, user: newUser };
   },
 
   updateUser(id: string, updates: Partial<UserProfile>, adminName: string = 'System Admin'): UserProfile | null {
@@ -246,16 +431,64 @@ export const StrawSyncStore = {
     return this.updateUser(id, { isVerified: true }, adminName);
   },
 
+  updatePayoutDetails(
+    userId: string,
+    details: {
+      upiId?: string;
+      bankAccountNumber?: string;
+      ifscCode?: string;
+      bankHolderName?: string;
+    }
+  ): AuthResult {
+    const current = this.getCurrentUser();
+    if (!current || current.id !== userId) {
+      return {
+        success: false,
+        error: 'Unauthorized: only the logged-in farmer can update their own payout details.',
+      };
+    }
+
+    const upi = details.upiId?.trim() || '';
+    const bankAcc = details.bankAccountNumber?.trim() || '';
+    const ifsc = details.ifscCode?.trim().toUpperCase() || '';
+    const holder = details.bankHolderName?.trim() || current.name;
+
+    if (!upi && !(bankAcc && ifsc)) {
+      return {
+        success: false,
+        error: 'Please enter a valid UPI ID or Bank Account Number with IFSC code.',
+      };
+    }
+
+    const users = this.getAllUsers();
+    const index = users.findIndex((u) => u.id === userId);
+    if (index === -1) {
+      return { success: false, error: 'User profile not found.' };
+    }
+
+    const updated: UserProfile = {
+      ...users[index],
+      upiId: upi || undefined,
+      bankAccountNumber: bankAcc || undefined,
+      ifscCode: ifsc || undefined,
+      bankHolderName: holder || undefined,
+    };
+    users[index] = updated;
+    setToStorage(STORAGE_KEYS.USERS, users);
+    this.setCurrentUser(updated);
+    return { success: true, user: updated };
+  },
+
   changeUserRole(id: string, newRole: UserRole, adminName: string = 'System Admin'): UserProfile | null {
     return this.updateUser(id, { role: newRole }, adminName);
   },
 
   requestPasswordReset(identifier: string): { success: boolean; message: string; resetToken?: string } {
+    const normId = normalizeIdentifier(identifier);
     const users = this.getAllUsers();
     const user = users.find(
       (u) =>
-        u.email.toLowerCase() === identifier.toLowerCase().trim() ||
-        u.phone.replace(/\s+/g, '') === identifier.replace(/\s+/g, '').trim()
+        (Boolean(normId) && (normalizeIdentifier(u.email) === normId || normalizeIdentifier(u.phone) === normId))
     );
 
     if (!user) {
@@ -268,33 +501,51 @@ export const StrawSyncStore = {
     const token = `rst_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
     return {
       success: true,
-      message: `Password reset verification token generated for ${user.email}. Use the token below to update credentials.`,
+      message: `Password reset verification token generated for ${user.email || user.phone}. Use the token below to update credentials.`,
       resetToken: token,
     };
   },
 
   resetPassword(identifier: string, newPassword: string): boolean {
+    const normId = normalizeIdentifier(identifier);
     const users = this.getAllUsers();
     const index = users.findIndex(
       (u) =>
-        u.email.toLowerCase() === identifier.toLowerCase().trim() ||
-        u.phone.replace(/\s+/g, '') === identifier.replace(/\s+/g, '').trim() ||
-        u.id === identifier
+        u.id === identifier ||
+        (Boolean(normId) && (normalizeIdentifier(u.email) === normId || normalizeIdentifier(u.phone) === normId))
     );
 
     if (index === -1) return false;
-    users[index].password = newPassword;
+    users[index].password = newPassword.trim();
     setToStorage(STORAGE_KEYS.USERS, users);
     notifyListeners();
     return true;
   },
 
-  // Residue Listings
+  // Residue & Produce Listings
   getListings(): ResidueListing[] {
     return getFromStorage<ResidueListing[]>(
       STORAGE_KEYS.LISTINGS,
       INITIAL_LISTINGS
-    );
+    ).map((l) => {
+      const weightUnit: WeightUnit = l.weightUnit || 'tonne';
+      const coeff = CROP_COEFFICIENTS[l.cropType] || CROP_COEFFICIENTS.paddy;
+      return {
+        ...l,
+        weightUnit,
+        originalQuantity:
+          l.originalQuantity !== undefined ? l.originalQuantity : fromTonnes(l.recoverableTonnes, weightUnit),
+        pricePerUnit:
+          l.pricePerUnit !== undefined
+            ? l.pricePerUnit
+            : weightUnit === 'kg'
+              ? Math.round(l.expectedPricePerTonne / 1000)
+              : weightUnit === 'quintal'
+                ? Math.round(l.expectedPricePerTonne / 10)
+                : l.expectedPricePerTonne,
+        category: l.category || coeff.category,
+      };
+    });
   },
 
   getListingById(id: string): ResidueListing | undefined {
@@ -303,8 +554,14 @@ export const StrawSyncStore = {
 
   addListing(data: {
     cropType: ResidueListing['cropType'];
-    landAreaAcres: number;
-    expectedPricePerTonne: number;
+    landAreaAcres?: number;
+    expectedPricePerTonne?: number;
+    directQuantity?: number;
+    weightUnit?: WeightUnit;
+    pricePerUnit?: number;
+    imageUrl?: string;
+    category?: ListingCategory;
+    customCropName?: string;
     harvestDate: string;
     collectionStartDate: string;
     collectionEndDate: string;
@@ -317,8 +574,30 @@ export const StrawSyncStore = {
     notes?: string;
   }): ResidueListing {
     const currentUser = this.getCurrentUser() || INITIAL_USERS[0];
-    const estimates = estimateResidue(data.cropType, data.landAreaAcres, data.baleType);
-    const coeff = CROP_COEFFICIENTS[data.cropType];
+    const coeff = CROP_COEFFICIENTS[data.cropType] || CROP_COEFFICIENTS.paddy;
+    const unit: WeightUnit = data.weightUnit || 'tonne';
+    const acres = Math.max(0, Number(data.landAreaAcres || 0));
+    const estimates = estimateResidue(data.cropType, Math.max(1, acres || 10), data.baleType);
+
+    const recoverableTonnes =
+      data.directQuantity !== undefined && data.directQuantity > 0
+        ? toTonnes(data.directQuantity, unit)
+        : estimates.recoverableTonnes;
+
+    const originalQuantity =
+      data.directQuantity !== undefined && data.directQuantity > 0
+        ? Number(data.directQuantity)
+        : fromTonnes(recoverableTonnes, unit);
+
+    const pricePerUnit =
+      data.pricePerUnit !== undefined
+        ? Number(data.pricePerUnit)
+        : Number(data.expectedPricePerTonne || 0);
+
+    const expectedPricePerTonne =
+      data.expectedPricePerTonne !== undefined && data.pricePerUnit === undefined
+        ? Number(data.expectedPricePerTonne)
+        : pricePerUnitToPerTonne(pricePerUnit, unit);
 
     // Default coords if not supplied
     const defaultCoords = {
@@ -336,17 +615,25 @@ export const StrawSyncStore = {
       state: data.state || 'Punjab',
       coordinates: data.coordinates || defaultCoords,
       cropType: data.cropType,
-      cropName: coeff.cropName,
-      landAreaAcres: Number(data.landAreaAcres),
-      estimatedGrossTonnes: estimates.grossTonnes,
-      recoverableTonnes: estimates.recoverableTonnes,
-      moisturePercentage: data.moisturePercentage || coeff.typicalMoisturePercent,
+      cropName: data.customCropName?.trim() || coeff.cropName,
+      category: data.category || coeff.category,
+      landAreaAcres: acres,
+      estimatedGrossTonnes:
+        acres > 0 ? estimates.grossTonnes : Number((recoverableTonnes * 1.1).toFixed(2)),
+      recoverableTonnes,
+      originalQuantity,
+      weightUnit: unit,
+      pricePerUnit,
+      imageUrl: data.imageUrl || undefined,
+      moisturePercentage:
+        data.moisturePercentage !== undefined ? data.moisturePercentage : coeff.typicalMoisturePercent,
       baleType: data.baleType,
-      expectedPricePerTonne: Number(data.expectedPricePerTonne),
+      expectedPricePerTonne,
       harvestDate: data.harvestDate,
       collectionStartDate: data.collectionStartDate,
       collectionEndDate: data.collectionEndDate,
-      qualityScore: (data.moisturePercentage || coeff.typicalMoisturePercent) <= 14 ? 'A' : 'B',
+      qualityScore:
+        (data.moisturePercentage ?? coeff.typicalMoisturePercent) <= 18 ? 'A' : 'B',
       status: 'verified', // Auto-verified for seamless demonstration
       notes: data.notes || 'Listing registered via StrawSync Liquidity Portal.',
       createdAt: new Date().toISOString(),
@@ -420,7 +707,20 @@ export const StrawSyncStore = {
 
   // Buyer Demands
   getDemands(): BuyerDemand[] {
-    return getFromStorage<BuyerDemand[]>(STORAGE_KEYS.DEMANDS, INITIAL_DEMANDS);
+    return getFromStorage<BuyerDemand[]>(STORAGE_KEYS.DEMANDS, INITIAL_DEMANDS).map((d) => {
+      const fulfilledTonnes = Math.min(d.requiredTonnes, Math.max(0, d.fulfilledTonnes));
+      const status =
+        d.status === 'cancelled'
+          ? 'cancelled'
+          : fulfilledTonnes >= d.requiredTonnes
+            ? ('fulfilled' as const)
+            : d.status;
+      return {
+        ...d,
+        fulfilledTonnes,
+        status,
+      };
+    });
   },
 
   getDemandById(id: string): BuyerDemand | undefined {
@@ -475,7 +775,38 @@ export const StrawSyncStore = {
     return getFromStorage<PurchaseOrder[]>(
       STORAGE_KEYS.ORDERS,
       INITIAL_ORDERS
-    );
+    ).map((o) => {
+      const pickupCoords: [number, number] = o.pickupCoords || [
+        o.pickupLocation?.lat || 30.3742,
+        o.pickupLocation?.lng || 75.8712,
+      ];
+      const dropCoords: [number, number] = o.dropCoords || [
+        o.deliveryLocation?.lat || 29.3909,
+        o.deliveryLocation?.lng || 76.9635,
+      ];
+      const gpsProgressPercent =
+        o.gpsProgressPercent !== undefined ? o.gpsProgressPercent : defaultProgressForStatus(o.status);
+      const currentTruckCoords: [number, number] =
+        o.currentTruckCoords || interpolateCoords(pickupCoords, dropCoords, gpsProgressPercent);
+
+      return {
+        ...o,
+        weightUnit: o.weightUnit || 'tonne',
+        displayQuantity: o.displayQuantity ?? o.quantityTonnes,
+        pickupCoords,
+        dropCoords,
+        gpsProgressPercent,
+        currentTruckCoords,
+        vehicleNumber: o.vehicleNumber || 'HR-05-BL-4891',
+        paymentStatus:
+          o.paymentStatus ||
+          (o.status === 'settled'
+            ? 'settled'
+            : o.status === 'delivered'
+              ? 'pending_release'
+              : 'escrow_funded'),
+      };
+    });
   },
 
   getOrderById(id: string): PurchaseOrder | undefined {
@@ -484,29 +815,40 @@ export const StrawSyncStore = {
 
   createOrderFromMatch(
     match: MatchResult,
-    customQuantityTonnes?: number
+    customQuantityTonnes?: number,
+    displayMeta?: { weightUnit?: WeightUnit; displayQuantity?: number }
   ): PurchaseOrder {
-    const qty = customQuantityTonnes || Math.min(match.listing.recoverableTonnes, 30);
+    const activeUser = this.getCurrentUser();
+    const actingBuyer = activeUser?.role === 'buyer' ? activeUser : null;
+    const requestedQty = customQuantityTonnes || Math.min(match.listing.recoverableTonnes, 30);
+    const qty = Math.max(0.01, Number(Math.min(requestedQty, match.listing.recoverableTonnes).toFixed(3)));
     const farmgateTotal = Math.round(qty * match.farmgatePricePerTonne);
     const freightTotal = Math.round(qty * match.estimatedFreightPerTonne);
     const deliveredTotal = farmgateTotal + freightTotal;
-    const cropCoeff = CROP_COEFFICIENTS[match.listing.cropType];
-    const co2Tonnes = Number(((qty * cropCoeff.co2AbatementTonnesPerTonne)).toFixed(1));
+    const cropCoeff = CROP_COEFFICIENTS[match.listing.cropType] || CROP_COEFFICIENTS.paddy;
+    const co2Tonnes = Number(((qty * cropCoeff.co2AbatementTonnesPerTonne)).toFixed(2));
+    const unit: WeightUnit = displayMeta?.weightUnit || match.listing.weightUnit || 'tonne';
+    const displayQty = displayMeta?.displayQuantity ?? fromTonnes(qty, unit);
+    const pickupCoords: [number, number] = [match.listing.coordinates.lat, match.listing.coordinates.lng];
+    const dropCoords: [number, number] = [
+      match.demand.plantLocation.coordinates.lat,
+      match.demand.plantLocation.coordinates.lng,
+    ];
 
     const newOrder: PurchaseOrder = {
       id: `ord-${Date.now()}`,
       orderNumber: `ORD-2026-${Math.floor(1000 + Math.random() * 9000)}`,
       listingId: match.listingId,
       demandId: match.demandId,
-      buyerId: match.demand.buyerId,
-      buyerName: match.demand.companyName,
+      buyerId: actingBuyer ? actingBuyer.id : match.demand.buyerId,
+      buyerName: actingBuyer ? (actingBuyer.organization || actingBuyer.name) : match.demand.companyName,
       farmerId: match.listing.farmerId,
       farmerName: match.listing.farmerName,
       farmerPhone: match.listing.farmerPhone,
-      logisticsPartnerId: 'user-logistics-1',
-      logisticsPartnerName: 'Khalsa Agro Transport & Fleet Co.',
       cropType: match.listing.cropType,
       quantityTonnes: qty,
+      weightUnit: unit,
+      displayQuantity: displayQty,
       farmgateRate: match.farmgatePricePerTonne,
       freightRate: match.estimatedFreightPerTonne,
       totalDeliveredRate: match.estimatedDeliveredPricePerTonne,
@@ -517,34 +859,41 @@ export const StrawSyncStore = {
         village: match.listing.village,
         district: match.listing.district,
         state: match.listing.state,
-        lat: match.listing.coordinates.lat,
-        lng: match.listing.coordinates.lng,
+        lat: pickupCoords[0],
+        lng: pickupCoords[1],
       },
       deliveryLocation: {
-        facility: `${match.demand.companyName} (${match.demand.plantLocation.district})`,
+        facility: `${actingBuyer ? (actingBuyer.organization || actingBuyer.name) : match.demand.companyName} (${match.demand.plantLocation.district})`,
         district: match.demand.plantLocation.district,
         state: match.demand.plantLocation.state,
-        lat: match.demand.plantLocation.coordinates.lat,
-        lng: match.demand.plantLocation.coordinates.lng,
+        lat: dropCoords[0],
+        lng: dropCoords[1],
       },
+      pickupCoords,
+      dropCoords,
+      currentTruckCoords: pickupCoords,
+      gpsProgressPercent: 0,
+      vehicleNumber: 'PB-13-TR-4421',
+      driverName: 'Sukhdev Singh',
       distanceKm: match.distanceKm,
       vehicleType: match.recommendedVehicle.name,
-      status: 'accepted',
+      status: 'requested',
+      paymentStatus: 'escrow_funded',
       trackingTimeline: [
         {
-          step: 'Order Confirmed & Escrow Allocated',
+          step: 'Purchase Request Submitted by Buyer',
           timestamp: new Date().toLocaleDateString('en-IN', {
             hour: '2-digit',
             minute: '2-digit',
           }),
           completed: true,
-          notes: 'Purchase order signed. Escrow fund secured.',
+          notes: `Awaiting confirmation from ${match.listing.farmerName}.`,
         },
         {
-          step: 'Vehicle Dispatched to Farmgate',
-          timestamp: 'Scheduled Today',
+          step: 'Farmer Confirmation & Vehicle Dispatch',
+          timestamp: 'Pending Farmer Approval',
           completed: false,
-          notes: `Assigned: ${match.recommendedVehicle.name}`,
+          notes: `Assigned vehicle class: ${match.recommendedVehicle.name}`,
         },
         {
           step: 'Loaded & Weighed on Certified Weighbridge',
@@ -576,13 +925,10 @@ export const StrawSyncStore = {
     orders.unshift(newOrder);
     setToStorage(STORAGE_KEYS.ORDERS, orders);
 
-    // Update listing status to 'matched'
-    this.updateListingStatus(match.listingId, 'matched');
-
-    // Update demand fulfilled quantity
+    // Update demand fulfilled quantity conservatively
     const demands = this.getDemands().map((d) => {
       if (d.id === match.demandId) {
-        const newFulfilled = d.fulfilledTonnes + qty;
+        const newFulfilled = Math.min(d.requiredTonnes, Math.max(0, d.fulfilledTonnes + qty));
         return {
           ...d,
           fulfilledTonnes: newFulfilled,
@@ -593,20 +939,37 @@ export const StrawSyncStore = {
     });
     setToStorage(STORAGE_KEYS.DEMANDS, demands);
 
+    this.addNotification({
+      userId: match.listing.farmerId,
+      title: `New Purchase Request #${newOrder.orderNumber}`,
+      message: `${newOrder.buyerName} requested ${formatWeight(displayQty, unit)} of ${match.listing.cropName} (₹${farmgateTotal.toLocaleString('en-IN')}).`,
+      type: 'order',
+      orderId: newOrder.id,
+    });
+
     notifyListeners();
     return newOrder;
   },
 
-  updateOrderStatus(orderId: string, newStatus: OrderStatus, notes?: string) {
+  updateOrderStatus(
+    orderId: string,
+    newStatus: OrderStatus,
+    notes?: string,
+    logisticsPartner?: { id: string; name: string }
+  ) {
     const orders = this.getOrders().map((o) => {
       if (o.id === orderId) {
         const timeline = [...o.trackingTimeline];
-        const nowStr = new Date().toLocaleDateString('en-IN', {
+        const nowIso = new Date().toISOString();
+        const nowStr = new Date(nowIso).toLocaleDateString('en-IN', {
           hour: '2-digit',
           minute: '2-digit',
         });
 
-        if (newStatus === 'logistics_assigned' && timeline[1]) {
+        if (newStatus === 'accepted' && timeline[1]) {
+          timeline[1].timestamp = 'Awaiting Logistics';
+          if (notes) timeline[1].notes = notes;
+        } else if (newStatus === 'logistics_assigned' && timeline[1]) {
           timeline[1].completed = true;
           timeline[1].timestamp = nowStr;
           if (notes) timeline[1].notes = notes;
@@ -633,9 +996,21 @@ export const StrawSyncStore = {
           if (notes) timeline[5].notes = notes;
         }
 
+        const pickup: [number, number] = o.pickupCoords || [o.pickupLocation.lat, o.pickupLocation.lng];
+        const drop: [number, number] = o.dropCoords || [o.deliveryLocation.lat, o.deliveryLocation.lng];
+        const targetPct = Math.max(o.gpsProgressPercent || 0, defaultProgressForStatus(newStatus));
+        const nextCoords = interpolateCoords(pickup, drop, targetPct);
+
         return {
           ...o,
           status: newStatus,
+          logisticsPartnerId: logisticsPartner ? logisticsPartner.id : o.logisticsPartnerId,
+          logisticsPartnerName: logisticsPartner ? logisticsPartner.name : o.logisticsPartnerName,
+          pickupCoords: pickup,
+          dropCoords: drop,
+          gpsProgressPercent: targetPct,
+          currentTruckCoords: nextCoords,
+          lastGpsUpdatedAt: targetPct > 0 ? nowIso : o.lastGpsUpdatedAt,
           trackingTimeline: timeline,
         };
       }
@@ -646,11 +1021,114 @@ export const StrawSyncStore = {
     notifyListeners();
   },
 
+  broadcastTruckGps(
+    orderId: string,
+    options?: {
+      advancePercent?: number;
+      coords?: [number, number];
+      vehicleNumber?: string;
+      driverName?: string;
+    }
+  ): { success: true; order: PurchaseOrder } | { success: false; error: string } {
+    const current = this.getCurrentUser();
+    const existing = this.getOrderById(orderId);
+    if (!existing) {
+      return { success: false, error: 'Order not found.' };
+    }
+
+    const isAuthorized =
+      current?.role === 'admin' ||
+      (current?.role === 'logistics' &&
+        (!existing.logisticsPartnerId || existing.logisticsPartnerId === current.id));
+
+    if (!isAuthorized) {
+      return {
+        success: false,
+        error: 'Unauthorized: only the assigned logistics partner or admin can broadcast GPS updates.',
+      };
+    }
+
+    const pickup: [number, number] = existing.pickupCoords || [
+      existing.pickupLocation.lat,
+      existing.pickupLocation.lng,
+    ];
+    const drop: [number, number] = existing.dropCoords || [
+      existing.deliveryLocation.lat,
+      existing.deliveryLocation.lng,
+    ];
+
+    const stepAdvance = options?.advancePercent ?? 25;
+    const currentPercent = existing.gpsProgressPercent || 0;
+    const nextPercent = options?.coords
+      ? Math.min(95, Math.max(10, currentPercent + 10))
+      : Math.min(100, Math.max(0, currentPercent + stepAdvance));
+
+    const nextCoords: [number, number] = options?.coords
+      ? [Number(options.coords[0].toFixed(5)), Number(options.coords[1].toFixed(5))]
+      : interpolateCoords(pickup, drop, nextPercent);
+
+    const nowIso = new Date().toISOString();
+    let updatedOrder: PurchaseOrder | null = null;
+    const orders = this.getOrders().map((o) => {
+      if (o.id !== orderId) return o;
+      updatedOrder = {
+        ...o,
+        logisticsPartnerId:
+          o.logisticsPartnerId || (current?.role === 'logistics' ? current.id : o.logisticsPartnerId),
+        logisticsPartnerName:
+          o.logisticsPartnerName ||
+          (current?.role === 'logistics' ? current.organization || current.name : o.logisticsPartnerName),
+        pickupCoords: pickup,
+        dropCoords: drop,
+        currentTruckCoords: nextCoords,
+        gpsProgressPercent: nextPercent,
+        lastGpsUpdatedAt: nowIso,
+        vehicleNumber: options?.vehicleNumber?.trim() || o.vehicleNumber || 'HR-05-BL-4891',
+        driverName: options?.driverName?.trim() || o.driverName || 'Sukhdev Singh',
+      };
+      return updatedOrder;
+    });
+
+    if (!updatedOrder) {
+      return { success: false, error: 'Failed to update GPS coordinates.' };
+    }
+
+    setToStorage(STORAGE_KEYS.ORDERS, orders);
+    notifyListeners();
+    return { success: true, order: updatedOrder };
+  },
+
   acceptPurchaseRequest(orderId: string) {
-    this.updateOrderStatus(orderId, 'accepted', 'Farmer confirmed residue availability and accepted purchase request.');
+    const order = this.getOrderById(orderId);
+    if (!order || order.status !== 'requested') return;
+
+    const listing = this.getListingById(order.listingId);
+    if (listing) {
+      const remainingTonnes = Math.max(0, Number((listing.recoverableTonnes - order.quantityTonnes).toFixed(3)));
+      const unit: WeightUnit = listing.weightUnit || 'tonne';
+      this.updateListing(listing.id, {
+        recoverableTonnes: remainingTonnes,
+        originalQuantity: fromTonnes(remainingTonnes, unit),
+        status: remainingTonnes <= 0 ? 'sold' : 'matched',
+      });
+    }
+
+    this.updateOrderStatus(
+      orderId,
+      'accepted',
+      'Farmer confirmed residue availability and accepted purchase request. Ready for logistics dispatch.'
+    );
+
+    this.addNotification({
+      userId: order.buyerId,
+      title: `Request Accepted (#${order.orderNumber})`,
+      message: `${order.farmerName} accepted your request for ${order.quantityTonnes}t ${order.cropType.toUpperCase()}.`,
+      type: 'success',
+    });
   },
 
   rejectPurchaseRequest(orderId: string, reason: string = 'Residue unavailable or price mismatch') {
+    const existing = this.getOrderById(orderId);
     const orders = this.getOrders().map((o) => {
       if (o.id === orderId) {
         return {
@@ -662,6 +1140,35 @@ export const StrawSyncStore = {
       return o;
     });
     setToStorage(STORAGE_KEYS.ORDERS, orders);
+
+    if (existing) {
+      // Restore demand remaining quantity and listing availability on rejection
+      const demands = this.getDemands().map((d) => {
+        if (d.id === existing.demandId) {
+          const nextFulfilled = Math.max(0, Number((d.fulfilledTonnes - existing.quantityTonnes).toFixed(1)));
+          return {
+            ...d,
+            fulfilledTonnes: nextFulfilled,
+            status: nextFulfilled > 0 ? ('partially_fulfilled' as const) : ('active' as const),
+          };
+        }
+        return d;
+      });
+      setToStorage(STORAGE_KEYS.DEMANDS, demands);
+
+      const listing = this.getListingById(existing.listingId);
+      if (listing && listing.status !== 'sold' && listing.recoverableTonnes > 0) {
+        this.updateListingStatus(listing.id, 'verified');
+      }
+
+      this.addNotification({
+        userId: existing.buyerId,
+        title: `Request Declined (#${existing.orderNumber})`,
+        message: `${existing.farmerName} declined your request: ${reason}`,
+        type: 'warning',
+      });
+    }
+
     notifyListeners();
   },
 
@@ -745,19 +1252,281 @@ export const StrawSyncStore = {
     notifyListeners();
   },
 
-  uploadDeliveryProof(orderId: string, proofUrl: string, note: string = 'Certified weighbridge slip uploaded') {
-    const orders = this.getOrders().map((o) => {
-      if (o.id === orderId) {
-        return {
-          ...o,
-          deliveryProofUrl: proofUrl,
-          deliveryProofNote: note,
-          status: 'delivered' as OrderStatus,
-        };
-      }
-      return o;
+  markOrderDelivered(
+    orderId: string,
+    details?: {
+      slipId?: string;
+      netTonnes?: number;
+      proofUrl?: string;
+      notes?: string;
+    }
+  ): { success: true; order: PurchaseOrder } | { success: false; error: string } {
+    const current = this.getCurrentUser();
+    const order = this.getOrderById(orderId);
+    if (!order) {
+      return { success: false, error: 'Order not found.' };
+    }
+
+    const isAuthorizedLogistics =
+      current?.role === 'admin' ||
+      (current?.role === 'logistics' &&
+        (!order.logisticsPartnerId || order.logisticsPartnerId === current.id));
+
+    if (!isAuthorizedLogistics) {
+      return {
+        success: false,
+        error: 'Unauthorized: only the assigned logistics partner or admin can mark delivery.',
+      };
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowDisplay = new Date(nowIso).toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
     });
+    const slipId = details?.slipId?.trim() || order.weighbridgeSlipId || `WB-${order.orderNumber.slice(-4)}`;
+    const netTonnes = Number(details?.netTonnes || order.weighbridgeNetTonnes || order.quantityTonnes);
+    const noteText =
+      details?.notes ||
+      `Gate Entry Complete. Certified Weighbridge Slip #${slipId} (${netTonnes}t).`;
+
+    let updatedOrder: PurchaseOrder | null = null;
+    const orders = this.getOrders().map((o) => {
+      if (o.id !== orderId) return o;
+      const timeline = o.trackingTimeline.map((step, idx) => {
+        if (idx <= 4) {
+          return {
+            ...step,
+            completed: true,
+            timestamp: idx === 4 || !step.completed ? nowDisplay : step.timestamp,
+            notes: idx === 4 ? noteText : step.notes,
+          };
+        }
+        return step;
+      });
+      const pickup: [number, number] = o.pickupCoords || [
+        o.pickupLocation.lat,
+        o.pickupLocation.lng,
+      ];
+      const drop: [number, number] = o.dropCoords || [
+        o.deliveryLocation.lat,
+        o.deliveryLocation.lng,
+      ];
+      updatedOrder = {
+        ...o,
+        status: 'delivered',
+        paymentStatus: o.paymentStatus === 'settled' ? 'settled' : 'pending_release',
+        deliveredAt: nowIso,
+        weighbridgeSlipId: slipId,
+        weighbridgeNetTonnes: netTonnes,
+        deliveryProofUrl: details?.proofUrl || o.deliveryProofUrl,
+        deliveryProofNote: noteText,
+        pickupCoords: pickup,
+        dropCoords: drop,
+        currentTruckCoords: drop,
+        gpsProgressPercent: 100,
+        lastGpsUpdatedAt: nowIso,
+        logisticsPartnerId:
+          o.logisticsPartnerId || (current?.role === 'logistics' ? current.id : o.logisticsPartnerId),
+        logisticsPartnerName:
+          o.logisticsPartnerName ||
+          (current?.role === 'logistics' ? current.organization || current.name : o.logisticsPartnerName),
+        trackingTimeline: timeline,
+      };
+      return updatedOrder;
+    });
+
+    if (!updatedOrder) {
+      return { success: false, error: 'Failed to update order.' };
+    }
+
     setToStorage(STORAGE_KEYS.ORDERS, orders);
+
+    const cropLabel = order.cropType.toUpperCase();
+    this.addNotification({
+      userId: order.farmerId,
+      title: `Shipment Delivered! Order #${order.orderNumber}`,
+      message: `Shipment Delivered! Order #${order.orderNumber} (${cropLabel}, ${netTonnes}t) has reached ${order.buyerName} via Slip #${slipId}. Awaiting Buyer confirmation & escrow release.`,
+      type: 'delivery',
+      orderId: order.id,
+    });
+
+    this.addNotification({
+      userId: order.buyerId,
+      title: `Biomass Delivered! Order #${order.orderNumber}`,
+      message: `Biomass Delivered! Order #${order.orderNumber} delivered by Logistics (Slip #${slipId}). Please confirm receipt to release ₹${order.farmerTotalPayout.toLocaleString('en-IN')} farmer payout.`,
+      type: 'delivery',
+      orderId: order.id,
+    });
+
+    notifyListeners();
+    return { success: true, order: updatedOrder };
+  },
+
+  confirmDeliveryAndReleasePayment(
+    orderId: string
+  ):
+    | { success: true; order: PurchaseOrder; transaction: EscrowTransaction }
+    | { success: false; error: string } {
+    const current = this.getCurrentUser();
+    const order = this.getOrderById(orderId);
+    if (!order) {
+      return { success: false, error: 'Order not found.' };
+    }
+
+    const isAuthorizedBuyer =
+      current?.role === 'admin' || (current?.role === 'buyer' && order.buyerId === current.id);
+
+    if (!isAuthorizedBuyer) {
+      return {
+        success: false,
+        error: 'Unauthorized: only the order buyer or an administrator can release escrow payout.',
+      };
+    }
+
+    if (order.status === 'cancelled' || order.status === 'requested') {
+      return {
+        success: false,
+        error: 'Cannot settle an order that has not been dispatched or accepted.',
+      };
+    }
+
+    const farmer = this.getAllUsers().find((u) => u.id === order.farmerId);
+    const hasUpi = Boolean(farmer?.upiId);
+    const hasBank = Boolean(farmer?.bankAccountNumber);
+    const paymentMethod: 'UPI' | 'IMPS/NEFT' = !hasUpi && hasBank ? 'IMPS/NEFT' : 'UPI';
+    const payoutTarget = hasUpi
+      ? farmer!.upiId!
+      : hasBank
+        ? `A/C ${farmer!.bankAccountNumber} (${farmer!.ifscCode || 'IFSC'})`
+        : 'Verified Kisan Bank Escrow';
+
+    const nowIso = new Date().toISOString();
+    const nowDisplay = new Date(nowIso).toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const utrNumber = `UTR${Date.now().toString().slice(-10)}`;
+
+    let settledOrder: PurchaseOrder | null = null;
+    const orders = this.getOrders().map((o) => {
+      if (o.id !== orderId) return o;
+      const timeline = o.trackingTimeline.map((step, idx) => ({
+        ...step,
+        completed: true,
+        timestamp: idx === 5 ? nowDisplay : step.completed ? step.timestamp : nowDisplay,
+        notes:
+          idx === 5
+            ? `Settled via ${paymentMethod} to ${payoutTarget} • UTR: ${utrNumber}`
+            : step.notes,
+      }));
+      settledOrder = {
+        ...o,
+        status: 'settled',
+        paymentStatus: 'settled',
+        paymentMethod,
+        settledPayoutTarget: payoutTarget,
+        utrNumber,
+        buyerConfirmedAt: nowIso,
+        settledAt: nowIso,
+        deliveredAt: o.deliveredAt || nowIso,
+        trackingTimeline: timeline,
+      };
+      return settledOrder;
+    });
+
+    if (!settledOrder) {
+      return { success: false, error: 'Failed to settle order.' };
+    }
+
+    setToStorage(STORAGE_KEYS.ORDERS, orders);
+
+    const transaction: EscrowTransaction = {
+      id: `txn-${Date.now()}`,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      buyerId: order.buyerId,
+      farmerId: order.farmerId,
+      farmerName: order.farmerName,
+      amount: order.farmerTotalPayout,
+      paymentMethod,
+      payoutDestination: payoutTarget,
+      utrNumber,
+      status: 'settled',
+      settledAt: nowIso,
+    };
+    const txns = this.getTransactions();
+    txns.unshift(transaction);
+    setToStorage(STORAGE_KEYS.TRANSACTIONS, txns);
+
+    this.addNotification({
+      userId: order.farmerId,
+      title: `Payment Credited: ₹${order.farmerTotalPayout.toLocaleString('en-IN')}`,
+      message: `Payment Credited: ₹${order.farmerTotalPayout.toLocaleString('en-IN')} settled to ${payoutTarget} for Order #${order.orderNumber} (UTR: ${utrNumber}).`,
+      type: 'payment',
+      orderId: order.id,
+    });
+
+    notifyListeners();
+    return { success: true, order: settledOrder, transaction };
+  },
+
+  uploadDeliveryProof(
+    orderId: string,
+    proofUrl: string,
+    note: string = 'Certified weighbridge slip uploaded',
+    slipId?: string,
+    netTonnes?: number
+  ) {
+    return this.markOrderDelivered(orderId, {
+      slipId,
+      netTonnes,
+      proofUrl,
+      notes: note,
+    });
+  },
+
+  // Escrow Transactions
+  getTransactions(farmerId?: string): EscrowTransaction[] {
+    const all = getFromStorage<EscrowTransaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+    return farmerId ? all.filter((t) => t.farmerId === farmerId) : all;
+  },
+
+  // Notifications
+  getNotifications(userId?: string): PlatformNotification[] {
+    const all = getFromStorage<PlatformNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
+    return userId ? all.filter((n) => n.userId === userId) : all;
+  },
+
+  addNotification(entry: Omit<PlatformNotification, 'id' | 'read' | 'createdAt'>): PlatformNotification {
+    const list = this.getNotifications();
+    const item: PlatformNotification = {
+      ...entry,
+      id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+    list.unshift(item);
+    setToStorage(STORAGE_KEYS.NOTIFICATIONS, list);
+    notifyListeners();
+    return item;
+  },
+
+  markNotificationRead(id: string) {
+    const updated = this.getNotifications().map((n) => (n.id === id ? { ...n, read: true } : n));
+    setToStorage(STORAGE_KEYS.NOTIFICATIONS, updated);
+    notifyListeners();
+  },
+
+  markAllNotificationsRead(userId: string) {
+    const updated = this.getNotifications().map((n) =>
+      n.userId === userId ? { ...n, read: true } : n
+    );
+    setToStorage(STORAGE_KEYS.NOTIFICATIONS, updated);
     notifyListeners();
   },
 
@@ -780,7 +1549,8 @@ export const StrawSyncStore = {
   },
 
   // Platform Settings
-  getPlatformSettings(): PlatformSettings {
+  getPlatformSettings(useStorage: boolean = true): PlatformSettings {
+    if (!useStorage) return DEFAULT_SETTINGS;
     return getFromStorage<PlatformSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
   },
 
@@ -805,11 +1575,11 @@ export const StrawSyncStore = {
   },
 
   // Platform Aggregate Analytics
-  getPlatformStats() {
-    const listings = this.getListings();
-    const demands = this.getDemands();
-    const orders = this.getOrders();
-    const users = this.getAllUsers();
+  getPlatformStats(useStorage: boolean = true) {
+    const listings = useStorage ? this.getListings() : INITIAL_LISTINGS;
+    const demands = useStorage ? this.getDemands() : INITIAL_DEMANDS;
+    const orders = useStorage ? this.getOrders() : INITIAL_ORDERS;
+    const users = useStorage ? this.getAllUsers() : INITIAL_USERS;
 
     const totalListedTonnes = listings.reduce((sum, l) => sum + l.recoverableTonnes, 0);
     const totalDemandedTonnes = demands.reduce((sum, d) => sum + d.requiredTonnes, 0);
@@ -855,13 +1625,16 @@ export const StrawSyncStore = {
 
   // Reset store to initial seed data
   resetToDefaults() {
+    const active = this.getCurrentUser();
     setToStorage(STORAGE_KEYS.USERS, INITIAL_USERS);
-    setToStorage(STORAGE_KEYS.CURRENT_USER, INITIAL_USERS[0]);
+    setToStorage(STORAGE_KEYS.CURRENT_USER, active?.role === 'admin' ? active : null);
     setToStorage(STORAGE_KEYS.LISTINGS, INITIAL_LISTINGS);
     setToStorage(STORAGE_KEYS.DEMANDS, INITIAL_DEMANDS);
     setToStorage(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
     setToStorage(STORAGE_KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS);
     setToStorage(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+    setToStorage(STORAGE_KEYS.NOTIFICATIONS, []);
+    setToStorage(STORAGE_KEYS.TRANSACTIONS, []);
     notifyListeners();
   },
 };

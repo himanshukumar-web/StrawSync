@@ -17,37 +17,64 @@ import {
 } from 'lucide-react';
 import { UserRole } from '../../types';
 import { StrawSyncStore } from '../../lib/store';
+import { INITIAL_USERS } from '../../lib/mockData';
 
 export default function LoginPage() {
   const router = useRouter();
   const [selectedRole, setSelectedRole] = useState<UserRole>('farmer');
-  const [identifier, setIdentifier] = useState('+91 98721 44520');
-  const [password, setPassword] = useState('••••••••');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   const handleQuickDemoLogin = (role: UserRole) => {
-    StrawSyncStore.switchRole(role);
-    setSuccess(`Logged in as demo ${role.toUpperCase()}! Redirecting to dashboard...`);
+    setError('');
+    const demoUser = INITIAL_USERS.find((u) => u.role === role);
+    if (!demoUser) return;
+    const res = StrawSyncStore.login(demoUser.email, role, demoUser.password || 'Demo@1234');
+    if (!res.success) {
+      setError(res.error);
+      return;
+    }
+    setSuccess(`Logged in as demo ${role.toUpperCase()} (${res.user.name})! Redirecting...`);
     setTimeout(() => {
-      router.push(`/${role}/dashboard`);
-    }, 350);
+      router.push(`/${res.user.role}/dashboard`);
+    }, 300);
+  };
+
+  const handleFillDemoCredentials = () => {
+    setError('');
+    setSuccess('');
+    const demoUser = INITIAL_USERS.find((u) => u.role === selectedRole);
+    if (!demoUser) return;
+    setIdentifier(demoUser.phone || demoUser.email);
+    setPassword(demoUser.password || 'Demo@1234');
   };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccess('');
 
     if (!identifier.trim()) {
       setError('Please enter your mobile number or registered email.');
       return;
     }
+    if (!password.trim()) {
+      setError('Please enter your password.');
+      return;
+    }
 
-    const user = StrawSyncStore.login(identifier, selectedRole);
-    setSuccess(`Welcome back, ${user.name}! Redirecting...`);
+    const result = StrawSyncStore.login(identifier, selectedRole, password);
+    if (!result.success) {
+      setError(result.error);
+      return;
+    }
+
+    setSuccess(`Welcome back, ${result.user.name}! Redirecting...`);
     setTimeout(() => {
-      router.push(`/${selectedRole}/dashboard`);
-    }, 350);
+      router.push(`/${result.user.role}/dashboard`);
+    }, 300);
   };
 
   return (
@@ -225,14 +252,24 @@ export default function LoginPage() {
             )}
 
             <div>
-              <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                Kisan Mobile Number / Email
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-charcoal-muted uppercase">
+                  Mobile Number / Registered Email
+                </label>
+                <button
+                  type="button"
+                  onClick={handleFillDemoCredentials}
+                  className="text-[11px] font-semibold text-forest hover:underline"
+                >
+                  Use Demo Account
+                </button>
+              </div>
               <div className="relative">
                 <Phone className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
                 <input
                   type="text"
-                  placeholder="+91 98721 44520"
+                  autoComplete="username"
+                  placeholder="Enter 10-digit mobile or email"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"
@@ -257,6 +294,8 @@ export default function LoginPage() {
                 <Lock className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
                 <input
                   type="password"
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 bg-white border border-earth-border rounded-xl text-xs font-semibold text-charcoal focus:outline-none focus:border-forest"

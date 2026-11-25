@@ -1,6 +1,20 @@
 export type UserRole = 'farmer' | 'buyer' | 'logistics' | 'admin';
 
-export type CropType = 'paddy' | 'wheat' | 'mustard' | 'sugarcane' | 'cotton' | 'maize';
+export type CropType =
+  | 'paddy'
+  | 'wheat'
+  | 'mustard'
+  | 'sugarcane'
+  | 'cotton'
+  | 'maize'
+  | 'vegetables'
+  | 'fruits'
+  | 'orchard'
+  | 'agri_waste';
+
+export type ListingCategory = 'crop_residue' | 'vegetables' | 'fruits' | 'agri_waste';
+
+export type WeightUnit = 'kg' | 'quintal' | 'tonne';
 
 export type ListingStatus = 'pending' | 'verified' | 'matched' | 'sold';
 
@@ -25,6 +39,11 @@ export interface ResidueListing {
   landAreaAcres: number;
   estimatedGrossTonnes: number;
   recoverableTonnes: number;
+  originalQuantity?: number;
+  weightUnit?: WeightUnit;
+  pricePerUnit?: number;
+  imageUrl?: string;
+  category?: ListingCategory;
   moisturePercentage: number;
   baleType: BaleType;
   expectedPricePerTonne: number;
@@ -151,7 +170,25 @@ export interface PurchaseOrder {
   };
   distanceKm: number;
   vehicleType: string;
+  weightUnit?: WeightUnit;
+  displayQuantity?: number;
+  pickupCoords?: [number, number];
+  dropCoords?: [number, number];
+  currentTruckCoords?: [number, number];
+  gpsProgressPercent?: number;
+  lastGpsUpdatedAt?: string;
+  vehicleNumber?: string;
+  driverName?: string;
   status: OrderStatus;
+  paymentStatus?: 'escrow_funded' | 'pending_release' | 'settled';
+  paymentMethod?: 'UPI' | 'IMPS/NEFT';
+  settledPayoutTarget?: string;
+  utrNumber?: string;
+  settledAt?: string;
+  deliveredAt?: string;
+  buyerConfirmedAt?: string;
+  weighbridgeNetTonnes?: number;
+  weighbridgeSlipId?: string;
   trackingTimeline: TrackingStep[];
   co2SavedTonnes: number;
   createdAt: string;
@@ -162,6 +199,21 @@ export interface PurchaseOrder {
   adjustments?: number;
   deliveryProofUrl?: string;
   deliveryProofNote?: string;
+}
+
+export interface EscrowTransaction {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  buyerId: string;
+  farmerId: string;
+  farmerName: string;
+  amount: number;
+  paymentMethod: 'UPI' | 'IMPS/NEFT';
+  payoutDestination: string;
+  utrNumber: string;
+  status: 'settled';
+  settledAt: string;
 }
 
 export interface UserProfile {
@@ -176,6 +228,10 @@ export interface UserProfile {
   isVerified: boolean;
   status?: 'active' | 'suspended';
   password?: string;
+  upiId?: string;
+  bankAccountNumber?: string;
+  ifscCode?: string;
+  bankHolderName?: string;
   createdAt?: string;
 }
 
@@ -206,7 +262,8 @@ export interface PlatformNotification {
   userId: string;
   title: string;
   message: string;
-  type: 'info' | 'success' | 'warning' | 'alert';
+  type: 'info' | 'success' | 'warning' | 'alert' | 'delivery' | 'payment' | 'order';
+  orderId?: string;
   read: boolean;
   createdAt: string;
 }

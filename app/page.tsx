@@ -43,7 +43,7 @@ export default function LandingPage() {
   const router = useRouter();
   const [isMounted, setIsMounted] = useState(false);
   const [calculatorOpen, setCalculatorOpen] = useState(false);
-  const [stats, setStats] = useState(StrawSyncStore.getPlatformStats());
+  const [stats, setStats] = useState(() => StrawSyncStore.getPlatformStats(false));
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [demands, setDemands] = useState<BuyerDemand[]>([]);
 
@@ -62,8 +62,12 @@ export default function LandingPage() {
   }, []);
 
   const handleRoleQuickStart = (role: 'farmer' | 'buyer' | 'logistics' | 'admin') => {
-    StrawSyncStore.switchRole(role);
-    router.push(`/${role}/dashboard`);
+    const current = StrawSyncStore.getCurrentUser();
+    if (current && (current.role === role || current.role === 'admin')) {
+      router.push(`/${role}/dashboard`);
+    } else {
+      router.push('/login');
+    }
   };
 
   return (
