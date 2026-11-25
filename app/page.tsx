@@ -24,6 +24,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { StrawSyncStore } from '../lib/store';
+import { useLanguage } from '../lib/i18n';
 import ResidueCalculatorModal from '../components/ResidueCalculatorModal';
 import { ResidueListing, BuyerDemand } from '../types';
 
@@ -41,6 +42,7 @@ const MapComponent = dynamic(() => import('../components/MapComponent'), {
 
 export default function LandingPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [isMounted, setIsMounted] = useState(false);
   const [calculatorOpen, setCalculatorOpen] = useState(false);
   const [stats, setStats] = useState(() => StrawSyncStore.getPlatformStats(false));
@@ -49,6 +51,7 @@ export default function LandingPage() {
 
   useEffect(() => {
     setIsMounted(true);
+    StrawSyncStore.initFromServer();
     setStats(StrawSyncStore.getPlatformStats());
     setListings(StrawSyncStore.getListings());
     setDemands(StrawSyncStore.getDemands());
@@ -76,12 +79,12 @@ export default function LandingPage() {
       <section className="bg-sage/70 border-b border-forest-100 py-2.5 px-4 text-center">
         <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-xs font-semibold text-forest-800">
           <span className="flex h-2 w-2 rounded-full bg-forest animate-pulse" />
-          <span>Harvest Season 2026-27 Active: Over 4,200 tonnes of Parali matched in Punjab & Haryana belts.</span>
+          <span>{t('hero.banner')}</span>
           <button
             onClick={() => setCalculatorOpen(true)}
             className="underline ml-2 hover:text-forest-900 font-bold"
           >
-            Calculate Field Value →
+            {t('hero.calcLink')}
           </button>
         </div>
       </section>
@@ -94,13 +97,13 @@ export default function LandingPage() {
             <div className="lg:col-span-7 space-y-6">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-sage border border-forest-200 text-xs font-bold text-forest-800 shadow-subtle">
                 <Sprout className="w-3.5 h-3.5 text-forest" />
-                <span>Agricultural Residue Liquidity & Smart Logistics</span>
+                <span>{t('hero.badge')}</span>
               </div>
 
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-charcoal tracking-tight leading-[1.15]">
-                Turn Agricultural Waste Into{' '}
+                {t('hero.headlinePrefix')}{' '}
                 <span className="text-forest relative inline-block">
-                  Opportunity.
+                  {t('hero.headlineHighlight')}
                   <svg
                     className="absolute -bottom-2 left-0 w-full text-forest-300 h-2.5"
                     viewBox="0 0 200 8"
@@ -118,7 +121,7 @@ export default function LandingPage() {
               </h1>
 
               <p className="text-lg text-charcoal-muted max-w-2xl font-normal leading-relaxed">
-                Connect verified farmers selling paddy straw, wheat husk, and bagasse directly with biomass power plants, ethanol refineries, and bio-pellet manufacturers.
+                {t('hero.subtext')}
               </p>
 
               {/* Tagline Callout */}
@@ -128,10 +131,10 @@ export default function LandingPage() {
                 </div>
                 <div>
                   <div className="text-sm font-bold text-charcoal">
-                    "Don't Burn It, Earn From It!"
+                    "{t('hero.tagline')}"
                   </div>
                   <div className="text-xs text-charcoal-muted">
-                    Preventing toxic stubble smog while creating ₹1,400 - ₹2,400/tonne net income for farming households.
+                    {t('hero.taglineSub')}
                   </div>
                 </div>
               </div>
@@ -142,7 +145,7 @@ export default function LandingPage() {
                   onClick={() => router.push('/farmer/dashboard')}
                   className="px-6 py-3.5 bg-forest text-white rounded-xl text-sm font-bold hover:bg-forest-700 shadow-card flex items-center gap-2 transition"
                 >
-                  <span>Farmer: List Residue & Earn</span>
+                  <span>{t('hero.farmerCta')}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
 
@@ -151,7 +154,7 @@ export default function LandingPage() {
                   className="px-6 py-3.5 bg-white border border-forest-300 text-forest-800 rounded-xl text-sm font-bold hover:bg-forest-50 shadow-subtle flex items-center gap-2 transition"
                 >
                   <Building2 className="w-4 h-4 text-forest" />
-                  <span>Buyer: Source Biomass</span>
+                  <span>{t('hero.buyerCta')}</span>
                 </button>
 
                 <button
@@ -159,39 +162,39 @@ export default function LandingPage() {
                   className="px-4 py-3.5 text-charcoal-soft hover:text-forest text-sm font-semibold flex items-center gap-1.5 transition"
                 >
                   <Calculator className="w-4 h-4 text-forest" />
-                  <span>Estimate Field Yield</span>
+                  <span>{t('hero.calcCta')}</span>
                 </button>
               </div>
 
               {/* Role Quick Selector Pills */}
               <div className="pt-4 border-t border-earth-border/80">
                 <span className="text-xs font-semibold text-charcoal-muted block mb-2">
-                  Instant Portal Access:
+                  {t('hero.instantAccess')}
                 </span>
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => handleRoleQuickStart('farmer')}
                     className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold text-forest-800 transition"
                   >
-                    🌾 Farmer Portal
+                    🌾 {t('layout.farmerPortal')}
                   </button>
                   <button
                     onClick={() => handleRoleQuickStart('buyer')}
                     className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-xs font-bold text-blue-800 transition"
                   >
-                    🏭 Biomass Buyer
+                    🏭 {t('role.buyerFull')}
                   </button>
                   <button
                     onClick={() => handleRoleQuickStart('logistics')}
                     className="px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 text-xs font-bold text-amber-800 transition"
                   >
-                    🚛 Logistics Dispatch
+                    🚛 {t('role.logisticsFull')}
                   </button>
                   <button
                     onClick={() => handleRoleQuickStart('admin')}
                     className="px-3 py-1.5 rounded-lg bg-purple-50 hover:bg-purple-100 border border-purple-200 text-xs font-bold text-purple-800 transition"
                   >
-                    🛡️ Admin Analytics
+                    🛡️ {t('nav.adminOversight')}
                   </button>
                 </div>
               </div>

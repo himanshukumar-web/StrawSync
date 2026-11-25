@@ -3,17 +3,19 @@
 import React from 'react';
 import { LandAreaUnit } from '../types';
 import { toAcres } from '../lib/store';
+import { useLanguage } from '../lib/i18n';
 
 export const LAND_UNIT_OPTIONS: Array<{
   key: LandAreaUnit;
+  labelKey: string;
   label: string;
   note: string;
 }> = [
-  { key: 'acre', label: 'Acres', note: '1 Acre standard' },
-  { key: 'bigha', label: 'Bigha', note: '1 Bigha = 0.625 Acre (1.6 Bigha = 1 Acre)' },
-  { key: 'hectare', label: 'Hectare', note: '1 Hectare = 2.47105 Acres' },
-  { key: 'kanal', label: 'Kanal', note: '1 Kanal = 0.125 Acre (8 Kanal = 1 Acre)' },
-  { key: 'guntha', label: 'Guntha', note: '1 Guntha = 0.025 Acre (40 Guntha = 1 Acre)' },
+  { key: 'acre', labelKey: 'modal.acres', label: 'Acres', note: '1 Acre standard' },
+  { key: 'bigha', labelKey: 'modal.bigha', label: 'Bigha', note: '1 Bigha = 0.625 Acre (1.6 Bigha = 1 Acre)' },
+  { key: 'hectare', labelKey: 'modal.hectare', label: 'Hectare', note: '1 Hectare = 2.47105 Acres' },
+  { key: 'kanal', labelKey: 'modal.kanal', label: 'Kanal', note: '1 Kanal = 0.125 Acre (8 Kanal = 1 Acre)' },
+  { key: 'guntha', labelKey: 'modal.guntha', label: 'Guntha', note: '1 Guntha = 0.025 Acre (40 Guntha = 1 Acre)' },
 ];
 
 interface Props {
@@ -30,9 +32,11 @@ export default function LandAreaField({
   unit,
   onChangeValue,
   onChangeUnit,
-  label = 'Farmland Area',
+  label,
   rightAction,
 }: Props) {
+  const { t } = useLanguage();
+  const displayLabel = label || t('modal.landArea', 'Farmland Area');
   const numericVal = value === '' ? 0 : Math.max(0, Number(value) || 0);
   const acresEquivalent = toAcres(numericVal, unit);
   const unitMeta = LAND_UNIT_OPTIONS.find((u) => u.key === unit);
@@ -41,7 +45,7 @@ export default function LandAreaField({
     <div>
       <div className="flex items-center justify-between mb-1 gap-2">
         <label className="block text-[11px] font-bold text-charcoal-muted uppercase">
-          {label}
+          {displayLabel}
         </label>
         {rightAction}
       </div>
@@ -72,7 +76,7 @@ export default function LandAreaField({
         >
           {LAND_UNIT_OPTIONS.map((opt) => (
             <option key={opt.key} value={opt.key}>
-              {opt.label}
+              {t(opt.labelKey, opt.label)}
             </option>
           ))}
         </select>

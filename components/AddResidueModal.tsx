@@ -5,6 +5,7 @@ import { Wheat, ArrowRight, X } from 'lucide-react';
 import { CalculatorEstimate } from '../types';
 import { StrawSyncStore, pricePerUnitToPerTonne, toAcres } from '../lib/store';
 import { CROP_COEFFICIENTS } from '../lib/engine';
+import { useLanguage } from '../lib/i18n';
 import ResidueListingFields, {
   ResidueFormState,
   createInitialResidueState,
@@ -49,6 +50,7 @@ export default function AddResidueModal({
   onSuccess,
   initialPrefill = null,
 }: Props) {
+  const { t } = useLanguage();
   const [formState, setFormState] = useState<ResidueFormState>(() =>
     createInitialResidueState()
   );
@@ -248,13 +250,13 @@ export default function AddResidueModal({
               onClick={onClose}
               className="px-4 py-2 text-xs font-semibold text-charcoal-muted hover:text-charcoal"
             >
-              Cancel
+              {t('modal.cancel', 'Cancel')}
             </button>
             <button
               type="submit"
               className="px-5 py-2.5 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold shadow-subtle flex items-center gap-2"
             >
-              <span>Confirm &amp; Publish Listing</span>
+              <span>{t('modal.publishListing', 'Confirm & Publish Listing')}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

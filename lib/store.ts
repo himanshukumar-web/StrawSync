@@ -90,6 +90,59 @@ type Listener = () => void;
 const listeners: Set<Listener> = new Set();
 let storageListenerBound = false;
 
+interface ServerCacheState {
+  configured: boolean;
+  loaded: boolean;
+  currentUser: UserProfile | null;
+  users: UserProfile[];
+  listings: ResidueListing[];
+  demands: BuyerDemand[];
+  orders: PurchaseOrder[];
+  notifications: PlatformNotification[];
+  calculations: SavedCalculation[];
+  auditLogs: AdminAuditLog[];
+  transactions: EscrowTransaction[];
+}
+
+const serverCache: ServerCacheState = {
+  configured: false,
+  loaded: false,
+  currentUser: null,
+  users: [],
+  listings: [],
+  demands: [],
+  orders: [],
+  notifications: [],
+  calculations: [],
+  auditLogs: [],
+  transactions: [],
+};
+
+let inflightBootstrap: Promise<boolean> | null = null;
+let bootstrapSeq = 0;
+
+function isServerActive(): boolean {
+  return serverCache.configured && serverCache.loaded;
+}
+
+function fireServerMutation(url: string, method: string, body?: unknown) {
+  if (typeof window === 'undefined' || !serverCache.configured) return;
+  fetch(url, {
+    method,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    credentials: 'include',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+    .then(async (res) => {
+      if (res.ok) {
+        await StrawSyncStore.initFromServer(true);
+      }
+    })
+    .catch((err) => {
+      console.warn(`Background sync failed for ${method} ${url}:`, err);
+    });
+}
+
 function ensureCrossTabSync() {
   if (typeof window === 'undefined' || storageListenerBound) return;
   storageListenerBound = true;
@@ -257,19 +310,171 @@ export const StrawSyncStore = {
     };
   },
 
+  isServerConfigured(): boolean {
+    return serverCache.configured;
+  },
+
+  isServerHydrated(): boolean {
+    return serverCache.loaded;
+  },
+
+  async initFromServer(force: boolean = false): Promise<boolean> {
+    if (typeof window === 'undefined') return false;
+    if (inflightBootstrap && !force) return inflightBootstrap;
+
+    const reqSeq = ++bootstrapSeq;
+    const promise = (async () => {
+      try {
+        const res = await fetch('/api/bootstrap', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        // Discard stale unauthenticated responses if a forced post-auth refresh started later.
+        if (reqSeq !== bootstrapSeq) return false;
+        if (!data.configured) {
+          serverCache.configured = false;
+          serverCache.loaded = true;
+          return false;
+        }
+        serverCache.configured = true;
+        serverCache.loaded = true;
+        serverCache.currentUser = data.user || null;
+        serverCache.users = Array.isArray(data.users) ? data.users : [];
+        serverCache.listings = Array.isArray(data.listings) ? data.listings : [];
+        serverCache.demands = Array.isArray(data.demands) ? data.demands : [];
+        serverCache.orders = Array.isArray(data.orders) ? data.orders : [];
+        serverCache.notifications = Array.isArray(data.notifications) ? data.notifications : [];
+        serverCache.calculations = Array.isArray(data.calculations) ? data.calculations : [];
+        serverCache.auditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
+        serverCache.transactions = Array.isArray(data.transactions) ? data.transactions : [];
+        notifyListeners();
+        return true;
+      } catch (err) {
+        console.warn('StrawSync server bootstrap unavailable, using local fallback:', err);
+        return false;
+      } finally {
+        if (reqSeq === bootstrapSeq) {
+          inflightBootstrap = null;
+        }
+      }
+    })();
+
+    inflightBootstrap = promise;
+    return promise;
+  },
+
   // Users & Auth
   getCurrentUser(): UserProfile | null {
+    if (isServerActive()) {
+      return serverCache.currentUser;
+    }
     return getFromStorage<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
   },
 
   setCurrentUser(user: UserProfile | null) {
+    if (serverCache.configured) {
+      serverCache.currentUser = user;
+    }
     setToStorage(STORAGE_KEYS.CURRENT_USER, user);
     notifyListeners();
   },
 
   logout() {
+    if (serverCache.configured) {
+      serverCache.currentUser = null;
+      serverCache.orders = [];
+      serverCache.notifications = [];
+      fireServerMutation('/api/auth/logout', 'POST');
+    }
     setToStorage(STORAGE_KEYS.CURRENT_USER, null);
     notifyListeners();
+  },
+
+  async logoutAsync(): Promise<void> {
+    if (typeof window !== 'undefined') {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      } catch {
+        // ignore network error during logout
+      }
+    }
+    serverCache.currentUser = null;
+    serverCache.orders = [];
+    serverCache.notifications = [];
+    setToStorage(STORAGE_KEYS.CURRENT_USER, null);
+    if (serverCache.configured) {
+      await this.initFromServer(true);
+    } else {
+      notifyListeners();
+    }
+  },
+
+  async loginAsync(identifier: string, role: UserRole, password: string = ''): Promise<AuthResult> {
+    if (typeof window !== 'undefined') {
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ identifier, role, password }),
+        });
+        const data = await res.json();
+        if (data?.unconfigured) {
+          serverCache.configured = false;
+          return this.login(identifier, role, password);
+        }
+        if (!res.ok || !data?.success) {
+          return { success: false, error: data?.error || 'Login failed. Please check credentials.' };
+        }
+        serverCache.configured = true;
+        serverCache.loaded = true;
+        serverCache.currentUser = data.user;
+        await this.initFromServer(true);
+        notifyListeners();
+        return { success: true, user: data.user };
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          return { success: false, error: 'Login request was cancelled. Please try again.' };
+        }
+        console.warn('Falling back to local login:', err);
+      }
+    }
+    return this.login(identifier, role, password);
+  },
+
+  async registerAsync(profileData: Omit<UserProfile, 'id' | 'isVerified'>): Promise<AuthResult> {
+    if (typeof window !== 'undefined') {
+      try {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(profileData),
+        });
+        const data = await res.json();
+        if (data?.unconfigured) {
+          serverCache.configured = false;
+          return this.register(profileData);
+        }
+        if (!res.ok || !data?.success) {
+          return { success: false, error: data?.error || 'Registration failed.' };
+        }
+        serverCache.configured = true;
+        serverCache.loaded = true;
+        serverCache.currentUser = data.user;
+        await this.initFromServer(true);
+        notifyListeners();
+        return { success: true, user: data.user };
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          return { success: false, error: 'Registration request was cancelled. Please try again.' };
+        }
+        console.warn('Falling back to local registration:', err);
+      }
+    }
+    return this.register(profileData);
   },
 
   isLoggedIn(): boolean {
@@ -337,6 +542,9 @@ export const StrawSyncStore = {
   },
 
   getAllUsers(): UserProfile[] {
+    if (isServerActive()) {
+      return serverCache.users;
+    }
     const stored = getFromStorage<UserProfile[]>(STORAGE_KEYS.USERS, []);
     const merged: UserProfile[] = [];
     const seen = new Set<string>();
@@ -455,10 +663,34 @@ export const StrawSyncStore = {
     const user = this.getAllUsers().find((u) => u.id === id);
     if (!user) return null;
     const nextStatus = user.status === 'suspended' ? 'active' : 'suspended';
+    if (serverCache.configured) {
+      serverCache.users = serverCache.users.map((u) =>
+        u.id === id ? { ...u, status: nextStatus } : u
+      );
+      fireServerMutation('/api/admin/actions', 'POST', {
+        action: 'toggle_user_status',
+        userId: id,
+      });
+      notifyListeners();
+      return { ...user, status: nextStatus };
+    }
     return this.updateUser(id, { status: nextStatus }, adminName);
   },
 
   verifyUser(id: string, adminName: string = 'System Admin'): UserProfile | null {
+    if (serverCache.configured) {
+      const user = this.getAllUsers().find((u) => u.id === id);
+      if (!user) return null;
+      serverCache.users = serverCache.users.map((u) =>
+        u.id === id ? { ...u, isVerified: true } : u
+      );
+      fireServerMutation('/api/admin/actions', 'POST', {
+        action: 'verify_user',
+        userId: id,
+      });
+      notifyListeners();
+      return { ...user, isVerified: true };
+    }
     return this.updateUser(id, { isVerified: true }, adminName);
   },
 
@@ -504,6 +736,18 @@ export const StrawSyncStore = {
       ifscCode: ifsc || undefined,
       bankHolderName: holder || undefined,
     };
+    if (serverCache.configured) {
+      serverCache.users = users.map((u) => (u.id === userId ? updated : u));
+      serverCache.currentUser = updated;
+      fireServerMutation('/api/profile/payout', 'PATCH', {
+        upiId: upi || undefined,
+        bankAccountNumber: bankAcc || undefined,
+        ifscCode: ifsc || undefined,
+        bankHolderName: holder || undefined,
+      });
+      notifyListeners();
+      return { success: true, user: updated };
+    }
     users[index] = updated;
     setToStorage(STORAGE_KEYS.USERS, users);
     this.setCurrentUser(updated);
@@ -511,6 +755,20 @@ export const StrawSyncStore = {
   },
 
   changeUserRole(id: string, newRole: UserRole, adminName: string = 'System Admin'): UserProfile | null {
+    if (serverCache.configured) {
+      const user = this.getAllUsers().find((u) => u.id === id);
+      if (!user) return null;
+      serverCache.users = serverCache.users.map((u) =>
+        u.id === id ? { ...u, role: newRole } : u
+      );
+      fireServerMutation('/api/admin/actions', 'POST', {
+        action: 'change_user_role',
+        userId: id,
+        newRole,
+      });
+      notifyListeners();
+      return { ...user, role: newRole };
+    }
     return this.updateUser(id, { role: newRole }, adminName);
   },
 
@@ -555,10 +813,10 @@ export const StrawSyncStore = {
 
   // Residue & Produce Listings
   getListings(): ResidueListing[] {
-    return getFromStorage<ResidueListing[]>(
-      STORAGE_KEYS.LISTINGS,
-      INITIAL_LISTINGS
-    ).map((l) => {
+    const base = isServerActive()
+      ? serverCache.listings
+      : getFromStorage<ResidueListing[]>(STORAGE_KEYS.LISTINGS, INITIAL_LISTINGS);
+    return base.map((l) => {
       const weightUnit: WeightUnit = l.weightUnit || 'tonne';
       const coeff = CROP_COEFFICIENTS[l.cropType] || CROP_COEFFICIENTS.paddy;
       return {
@@ -674,6 +932,13 @@ export const StrawSyncStore = {
       createdAt: new Date().toISOString(),
     };
 
+    if (serverCache.configured) {
+      serverCache.listings = [newListing, ...serverCache.listings];
+      fireServerMutation('/api/listings', 'POST', newListing);
+      notifyListeners();
+      return newListing;
+    }
+
     const listings = this.getListings();
     listings.unshift(newListing);
     setToStorage(STORAGE_KEYS.LISTINGS, listings);
@@ -682,6 +947,14 @@ export const StrawSyncStore = {
   },
 
   updateListingStatus(id: string, status: ResidueListing['status']) {
+    if (serverCache.configured) {
+      serverCache.listings = serverCache.listings.map((l) =>
+        l.id === id ? { ...l, status } : l
+      );
+      fireServerMutation(`/api/listings/${encodeURIComponent(id)}`, 'PATCH', { status });
+      notifyListeners();
+      return;
+    }
     const listings = this.getListings().map((l) =>
       l.id === id ? { ...l, status } : l
     );
@@ -690,6 +963,12 @@ export const StrawSyncStore = {
   },
 
   deleteListing(id: string) {
+    if (serverCache.configured) {
+      serverCache.listings = serverCache.listings.filter((l) => l.id !== id);
+      fireServerMutation(`/api/listings/${encodeURIComponent(id)}`, 'DELETE');
+      notifyListeners();
+      return;
+    }
     const listings = this.getListings().filter((l) => l.id !== id);
     setToStorage(STORAGE_KEYS.LISTINGS, listings);
     notifyListeners();
@@ -702,6 +981,12 @@ export const StrawSyncStore = {
 
     const previous = listings[index];
     const updated = { ...previous, ...updates };
+    if (serverCache.configured) {
+      serverCache.listings = listings.map((l) => (l.id === id ? updated : l));
+      fireServerMutation(`/api/listings/${encodeURIComponent(id)}`, 'PATCH', updates);
+      notifyListeners();
+      return updated;
+    }
     listings[index] = updated;
     setToStorage(STORAGE_KEYS.LISTINGS, listings);
     notifyListeners();
@@ -709,6 +994,18 @@ export const StrawSyncStore = {
   },
 
   verifyListing(id: string, adminName: string = 'System Admin'): ResidueListing | null {
+    if (serverCache.configured) {
+      const existing = serverCache.listings.find((l) => l.id === id);
+      if (!existing) return null;
+      const updated = { ...existing, status: 'verified' as const };
+      serverCache.listings = serverCache.listings.map((l) => (l.id === id ? updated : l));
+      fireServerMutation('/api/admin/actions', 'POST', {
+        action: 'verify_listing',
+        listingId: id,
+      });
+      notifyListeners();
+      return updated;
+    }
     const updated = this.updateListing(id, { status: 'verified' });
     if (updated) {
       this.addAuditLog({
@@ -725,6 +1022,19 @@ export const StrawSyncStore = {
   },
 
   rejectListing(id: string, reason: string, adminName: string = 'System Admin'): ResidueListing | null {
+    if (serverCache.configured) {
+      const existing = serverCache.listings.find((l) => l.id === id);
+      if (!existing) return null;
+      const updated = { ...existing, status: 'pending' as const, notes: `Rejected: ${reason}` };
+      serverCache.listings = serverCache.listings.map((l) => (l.id === id ? updated : l));
+      fireServerMutation('/api/admin/actions', 'POST', {
+        action: 'reject_listing',
+        listingId: id,
+        reason,
+      });
+      notifyListeners();
+      return updated;
+    }
     const updated = this.updateListing(id, { status: 'pending', notes: `Rejected: ${reason}` });
     if (updated) {
       this.addAuditLog({
@@ -742,7 +1052,10 @@ export const StrawSyncStore = {
 
   // Buyer Demands
   getDemands(): BuyerDemand[] {
-    return getFromStorage<BuyerDemand[]>(STORAGE_KEYS.DEMANDS, INITIAL_DEMANDS).map((d) => {
+    const base = isServerActive()
+      ? serverCache.demands
+      : getFromStorage<BuyerDemand[]>(STORAGE_KEYS.DEMANDS, INITIAL_DEMANDS);
+    return base.map((d) => {
       const fulfilledTonnes = Math.min(d.requiredTonnes, Math.max(0, d.fulfilledTonnes));
       const status =
         d.status === 'cancelled'
@@ -798,6 +1111,13 @@ export const StrawSyncStore = {
       createdAt: new Date().toISOString(),
     };
 
+    if (serverCache.configured) {
+      serverCache.demands = [newDemand, ...serverCache.demands];
+      fireServerMutation('/api/requests', 'POST', newDemand);
+      notifyListeners();
+      return newDemand;
+    }
+
     const demands = this.getDemands();
     demands.unshift(newDemand);
     setToStorage(STORAGE_KEYS.DEMANDS, demands);
@@ -807,10 +1127,10 @@ export const StrawSyncStore = {
 
   // Purchase Orders & Dispatch
   getOrders(): PurchaseOrder[] {
-    return getFromStorage<PurchaseOrder[]>(
-      STORAGE_KEYS.ORDERS,
-      INITIAL_ORDERS
-    ).map((o) => {
+    const base = isServerActive()
+      ? serverCache.orders
+      : getFromStorage<PurchaseOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    return base.map((o) => {
       const pickupCoords: [number, number] = o.pickupCoords || [
         o.pickupLocation?.lat || 30.3742,
         o.pickupLocation?.lng || 75.8712,
@@ -964,6 +1284,29 @@ export const StrawSyncStore = {
       estimatedDeliveryDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
     };
 
+    if (serverCache.configured) {
+      serverCache.orders = [newOrder, ...serverCache.orders];
+      serverCache.demands = serverCache.demands.map((d) => {
+        if (d.id === match.demandId) {
+          const newFulfilled = Math.min(d.requiredTonnes, Math.max(0, d.fulfilledTonnes + qty));
+          return {
+            ...d,
+            fulfilledTonnes: newFulfilled,
+            status: newFulfilled >= d.requiredTonnes ? ('fulfilled' as const) : ('partially_fulfilled' as const),
+          };
+        }
+        return d;
+      });
+      fireServerMutation('/api/orders', 'POST', {
+        ...newOrder,
+        deliveryFacility: newOrder.deliveryLocation.facility,
+        deliveryDistrict: newOrder.deliveryLocation.district,
+        deliveryState: newOrder.deliveryLocation.state,
+      });
+      notifyListeners();
+      return newOrder;
+    }
+
     const orders = this.getOrders();
     orders.unshift(newOrder);
     setToStorage(STORAGE_KEYS.ORDERS, orders);
@@ -1064,6 +1407,19 @@ export const StrawSyncStore = {
       return o;
     });
 
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'status',
+        status: newStatus,
+        notes,
+        logisticsId: logisticsPartner?.id,
+        logisticsName: logisticsPartner?.name,
+      });
+      notifyListeners();
+      return;
+    }
+
     setToStorage(STORAGE_KEYS.ORDERS, orders);
     notifyListeners();
   },
@@ -1140,6 +1496,19 @@ export const StrawSyncStore = {
       return { success: false, error: 'Failed to update GPS coordinates.' };
     }
 
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'gps',
+        progressPercent: nextPercent,
+        coords: nextCoords,
+        vehicleNumber: options?.vehicleNumber?.trim(),
+        driverName: options?.driverName?.trim(),
+      });
+      notifyListeners();
+      return { success: true, order: updatedOrder };
+    }
+
     setToStorage(STORAGE_KEYS.ORDERS, orders);
     notifyListeners();
     return { success: true, order: updatedOrder };
@@ -1148,6 +1517,32 @@ export const StrawSyncStore = {
   acceptPurchaseRequest(orderId: string) {
     const order = this.getOrderById(orderId);
     if (!order || order.status !== 'requested') return;
+
+    if (serverCache.configured) {
+      const listing = serverCache.listings.find((l) => l.id === order.listingId);
+      if (listing) {
+        const remainingTonnes = Math.max(0, Number((listing.recoverableTonnes - order.quantityTonnes).toFixed(3)));
+        const unit: WeightUnit = listing.weightUnit || 'tonne';
+        serverCache.listings = serverCache.listings.map((l) =>
+          l.id === listing.id
+            ? {
+                ...l,
+                recoverableTonnes: remainingTonnes,
+                originalQuantity: fromTonnes(remainingTonnes, unit),
+                status: remainingTonnes <= 0 ? ('sold' as const) : ('matched' as const),
+              }
+            : l
+        );
+      }
+      serverCache.orders = serverCache.orders.map((o) =>
+        o.id === orderId ? { ...o, status: 'accepted' as OrderStatus } : o
+      );
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'accept',
+      });
+      notifyListeners();
+      return;
+    }
 
     const listing = this.getListingById(order.listingId);
     if (listing) {
@@ -1186,6 +1581,17 @@ export const StrawSyncStore = {
       }
       return o;
     });
+
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'reject',
+        reason,
+      });
+      notifyListeners();
+      return;
+    }
+
     setToStorage(STORAGE_KEYS.ORDERS, orders);
 
     if (existing) {
@@ -1230,6 +1636,15 @@ export const StrawSyncStore = {
       }
       return o;
     });
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'admin_cancel',
+        reason,
+      });
+      notifyListeners();
+      return;
+    }
     setToStorage(STORAGE_KEYS.ORDERS, orders);
 
     this.addAuditLog({
@@ -1257,6 +1672,16 @@ export const StrawSyncStore = {
       }
       return o;
     });
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'assign_logistics',
+        logisticsId,
+        logisticsName,
+      });
+      notifyListeners();
+      return;
+    }
     setToStorage(STORAGE_KEYS.ORDERS, orders);
 
     this.addAuditLog({
@@ -1284,6 +1709,16 @@ export const StrawSyncStore = {
       }
       return o;
     });
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'admin_resolve_dispute',
+        resolutionNotes,
+        adjustment,
+      });
+      notifyListeners();
+      return;
+    }
     setToStorage(STORAGE_KEYS.ORDERS, orders);
 
     this.addAuditLog({
@@ -1387,6 +1822,19 @@ export const StrawSyncStore = {
 
     if (!updatedOrder) {
       return { success: false, error: 'Failed to update order.' };
+    }
+
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'deliver',
+        slipId,
+        netTonnes,
+        proofUrl: details?.proofUrl,
+        notes: noteText,
+      });
+      notifyListeners();
+      return { success: true, order: updatedOrder };
     }
 
     setToStorage(STORAGE_KEYS.ORDERS, orders);
@@ -1501,8 +1949,6 @@ export const StrawSyncStore = {
       return { success: false, error: 'Failed to settle order.' };
     }
 
-    setToStorage(STORAGE_KEYS.ORDERS, orders);
-
     const transaction: EscrowTransaction = {
       id: `txn-${Date.now()}`,
       orderId: order.id,
@@ -1517,6 +1963,22 @@ export const StrawSyncStore = {
       status: 'settled',
       settledAt: nowIso,
     };
+
+    if (serverCache.configured) {
+      serverCache.orders = orders;
+      serverCache.transactions = [transaction, ...serverCache.transactions];
+      fireServerMutation(`/api/orders/${encodeURIComponent(orderId)}`, 'PATCH', {
+        action: 'settle_payment',
+        paymentMethod,
+        utrNumber,
+        paymentReference: releaseMeta?.paymentReference,
+      });
+      notifyListeners();
+      return { success: true, order: settledOrder, transaction };
+    }
+
+    setToStorage(STORAGE_KEYS.ORDERS, orders);
+
     const txns = this.getTransactions();
     txns.unshift(transaction);
     setToStorage(STORAGE_KEYS.TRANSACTIONS, txns);
@@ -1550,7 +2012,9 @@ export const StrawSyncStore = {
 
   // Escrow Transactions
   getTransactions(farmerId?: string): EscrowTransaction[] {
-    const all = getFromStorage<EscrowTransaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+    const all = isServerActive()
+      ? serverCache.transactions
+      : getFromStorage<EscrowTransaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
     return farmerId ? all.filter((t) => t.farmerId === farmerId) : all;
   },
 
@@ -1602,6 +2066,9 @@ export const StrawSyncStore = {
 
   // Saved Calculations History
   getSavedCalculations(): SavedCalculation[] {
+    if (isServerActive()) {
+      return serverCache.calculations;
+    }
     return getFromStorage<SavedCalculation[]>(STORAGE_KEYS.SAVED_CALCULATIONS, []);
   },
 
@@ -1613,6 +2080,12 @@ export const StrawSyncStore = {
       createdAt: new Date().toISOString(),
     };
     const next = [saved, ...existing].slice(0, 50);
+    if (serverCache.configured) {
+      serverCache.calculations = next;
+      fireServerMutation('/api/calculations', 'POST', saved);
+      notifyListeners();
+      return saved;
+    }
     setToStorage(STORAGE_KEYS.SAVED_CALCULATIONS, next);
     notifyListeners();
     return saved;
@@ -1620,13 +2093,21 @@ export const StrawSyncStore = {
 
   deleteSavedCalculation(id: string): void {
     const filtered = this.getSavedCalculations().filter((c) => c.id !== id);
+    if (serverCache.configured) {
+      serverCache.calculations = filtered;
+      fireServerMutation(`/api/calculations/${encodeURIComponent(id)}`, 'DELETE');
+      notifyListeners();
+      return;
+    }
     setToStorage(STORAGE_KEYS.SAVED_CALCULATIONS, filtered);
     notifyListeners();
   },
 
   // Notifications
   getNotifications(userId?: string): PlatformNotification[] {
-    const all = getFromStorage<PlatformNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
+    const all = isServerActive()
+      ? serverCache.notifications
+      : getFromStorage<PlatformNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
     return userId ? all.filter((n) => n.userId === userId) : all;
   },
 
@@ -1645,12 +2126,28 @@ export const StrawSyncStore = {
   },
 
   markNotificationRead(id: string) {
+    if (serverCache.configured) {
+      serverCache.notifications = serverCache.notifications.map((n) =>
+        n.id === id ? { ...n, read: true } : n
+      );
+      fireServerMutation('/api/notifications/read', 'POST', { id });
+      notifyListeners();
+      return;
+    }
     const updated = this.getNotifications().map((n) => (n.id === id ? { ...n, read: true } : n));
     setToStorage(STORAGE_KEYS.NOTIFICATIONS, updated);
     notifyListeners();
   },
 
   markAllNotificationsRead(userId: string) {
+    if (serverCache.configured) {
+      serverCache.notifications = serverCache.notifications.map((n) =>
+        n.userId === userId ? { ...n, read: true } : n
+      );
+      fireServerMutation('/api/notifications/read', 'POST', {});
+      notifyListeners();
+      return;
+    }
     const updated = this.getNotifications().map((n) =>
       n.userId === userId ? { ...n, read: true } : n
     );
@@ -1660,6 +2157,9 @@ export const StrawSyncStore = {
 
   // Audit Logs
   getAuditLogs(): AdminAuditLog[] {
+    if (isServerActive()) {
+      return serverCache.auditLogs;
+    }
     return getFromStorage<AdminAuditLog[]>(STORAGE_KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS);
   },
 

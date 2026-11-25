@@ -40,6 +40,7 @@ import {
   toAcres,
   toTonnes,
 } from '../lib/store';
+import { useLanguage } from '../lib/i18n';
 import LandAreaField from './LandAreaField';
 
 interface Props {
@@ -56,6 +57,7 @@ interface Props {
 
 export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Props) {
   const router = useRouter();
+  const { t } = useLanguage();
   const [activeMode, setActiveMode] = useState<'farmer' | 'buyer'>('farmer');
 
   // Mode 1: Field Yield Estimator (Farmer)
@@ -340,10 +342,13 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-bold text-charcoal">
-                StrawSync Field Yield &amp; Cost Calculator
+                {t('calc.title', 'StrawSync Field Yield & Cost Calculator')}
               </h3>
               <p className="text-[11px] text-charcoal-muted">
-                Supports Indian land units, zero area inputs, order cost planning &amp; saved history
+                {t(
+                  'calc.subtitle',
+                  'Supports Indian land units, zero area inputs, order cost planning & saved history'
+                )}
               </p>
             </div>
           </div>
@@ -371,7 +376,7 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
             }`}
           >
             <Scale className="w-3.5 h-3.5" />
-            <span>Field Yield Estimator (Farmer)</span>
+            <span>{t('calc.farmerTab', 'Field Yield Estimator (Farmer)')}</span>
           </button>
           <button
             type="button"
@@ -386,7 +391,7 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
             }`}
           >
             <Truck className="w-3.5 h-3.5" />
-            <span>Quantity &amp; Order Cost (Buyer)</span>
+            <span>{t('calc.buyerTab', 'Quantity & Order Cost (Buyer)')}</span>
           </button>
         </div>
 
@@ -680,7 +685,7 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
               className="px-3.5 py-1.5 bg-white hover:bg-forest-50 border border-forest-200 text-forest rounded-xl font-bold flex items-center gap-1.5 transition"
             >
               <Bookmark className="w-3.5 h-3.5" />
-              <span>Save Calculation</span>
+              <span>{t('calc.saveBtn', 'Save Calculation')}</span>
             </button>
           </div>
 
@@ -693,7 +698,7 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
             >
               <span className="flex items-center gap-2">
                 <History className="w-4 h-4 text-forest" />
-                <span>Saved Calculations ({savedList.length})</span>
+                <span>{t('calc.savedHeading', 'Saved Calculations')} ({savedList.length})</span>
               </span>
               <span className="text-[11px] text-charcoal-muted">
                 {showHistory ? 'Hide' : 'Show'}
@@ -740,7 +745,7 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
                           className="px-2 py-1 rounded-lg bg-sand hover:bg-forest-50 border border-earth-border font-bold text-charcoal flex items-center gap-1"
                         >
                           <RotateCcw className="w-3 h-3" />
-                          <span>Load</span>
+                          <span>{t('calc.load', 'Load')}</span>
                         </button>
                         <button
                           type="button"
@@ -768,7 +773,9 @@ export default function ResidueCalculatorModal({ onClose, onApplyToListing }: Pr
                           }
                           className="px-2 py-1 rounded-lg bg-forest text-white font-bold"
                         >
-                          {item.mode === 'farmer' ? 'Use in Listing' : 'Use in Order'}
+                          {item.mode === 'farmer'
+                            ? t('calc.useListing', 'Use in Listing')
+                            : t('calc.useOrder', 'Use in Order')}
                         </button>
                         <button
                           type="button"

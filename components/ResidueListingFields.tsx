@@ -13,6 +13,7 @@ import {
 import { CROP_COEFFICIENTS, estimateResidue } from '../lib/engine';
 import { fromTonnes, pricePerUnitToPerTonne, toAcres, toTonnes } from '../lib/store';
 import { compressProductImage } from '../lib/imageUpload';
+import { useLanguage } from '../lib/i18n';
 import LandAreaField from './LandAreaField';
 
 export interface ResidueFormState {
@@ -135,6 +136,7 @@ interface Props {
 }
 
 export default function ResidueListingFields({ value, onChange, isEdit = false }: Props) {
+  const { t } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -232,7 +234,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-            Crop Residue / Farm Produce Type
+            {t('modal.cropType', 'Crop Residue / Farm Produce Type')}
           </label>
           <select
             value={value.cropType}
@@ -258,7 +260,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
 
         <div>
           <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-            Produce Variety / Lot Label (Optional)
+            {t('modal.lotLabel', 'Produce Variety / Lot Label (Optional)')}
           </label>
           <input
             type="text"
@@ -271,7 +273,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
 
         <div>
           <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-            Available Quantity
+            {t('modal.quantity', 'Available Quantity')}
           </label>
           <div className="flex gap-2">
             <input
@@ -305,7 +307,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
 
         <div>
           <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-            Expected Farmgate Price (₹ / {UNIT_SHORT[value.weightUnit]})
+            {t('modal.pricePerUnit', 'Expected Price')} (₹ / {UNIT_SHORT[value.weightUnit]})
           </label>
           <input
             type="number"
@@ -335,7 +337,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
           unit={value.landAreaUnit}
           onChangeValue={(landAreaInput) => onChange({ ...value, landAreaInput })}
           onChangeUnit={(landAreaUnit) => onChange({ ...value, landAreaUnit })}
-          label="Farmland Area (Optional, 0 allowed)"
+          label={`${t('modal.landArea', 'Farmland Area')} (0 allowed)`}
           rightAction={
             value.landAreaInput !== '' ? (
               <button
@@ -352,7 +354,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-              Form / Packaging
+              {t('modal.packaging', 'Form / Packaging')}
             </label>
             <select
               value={value.baleType}
@@ -367,7 +369,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
 
           <div>
             <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-              Moisture %
+              {t('modal.moisture', 'Moisture %')}
             </label>
             <input
               type="number"
@@ -414,7 +416,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
                 disabled={uploading}
                 className="px-3 py-1.5 rounded-lg bg-white border border-earth-border hover:border-forest text-xs font-semibold text-charcoal transition"
               >
-                {uploading ? 'Compressing...' : 'Replace Photo'}
+                {uploading ? 'Compressing...' : t('modal.replacePhoto', 'Replace Photo')}
               </button>
               <button
                 type="button"
@@ -422,7 +424,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
                 className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 hover:bg-red-50 flex items-center gap-1"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Remove</span>
+                <span>{t('modal.remove', 'Remove')}</span>
               </button>
             </div>
           </div>
@@ -434,7 +436,7 @@ export default function ResidueListingFields({ value, onChange, isEdit = false }
             className="w-full py-3 px-4 rounded-xl border-2 border-dashed border-earth-border hover:border-forest bg-white text-xs font-semibold text-charcoal-soft flex items-center justify-center gap-2 transition"
           >
             <ImagePlus className="w-4 h-4 text-forest" />
-            <span>{uploading ? 'Compressing Image...' : 'Upload Product Photo'}</span>
+            <span>{uploading ? 'Compressing Image...' : t('modal.uploadPhoto', 'Upload Product Photo')}</span>
           </button>
         )}
 

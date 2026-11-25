@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -19,9 +19,11 @@ import {
 } from 'lucide-react';
 import { UserRole } from '../../types';
 import { StrawSyncStore, normalizeIdentifier } from '../../lib/store';
+import { useLanguage } from '../../lib/i18n';
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [selectedRole, setSelectedRole] = useState<'farmer' | 'buyer' | 'logistics'>('farmer');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -32,9 +34,12 @@ export default function RegisterPage() {
   const [organization, setOrganization] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const inFlightRef = useRef(false);
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inFlightRef.current || submitting) return;
     setError('');
     setSuccess('');
 
@@ -71,26 +76,34 @@ export default function RegisterPage() {
       return;
     }
 
-    const result = StrawSyncStore.register({
-      name: name.trim(),
-      role: selectedRole,
-      phone: normPhone,
-      email: normEmail,
-      organization: organization.trim() || (selectedRole === 'farmer' ? 'Kisan Producer Group' : selectedRole === 'buyer' ? 'Biomass Enterprise' : 'Freight Transport'),
-      location: location.trim(),
-      coordinates: { lat: 30.3742, lng: 75.8712 },
-      password: password.trim(),
-    });
+    inFlightRef.current = true;
+    setSubmitting(true);
+    try {
+      const result = await StrawSyncStore.registerAsync({
+        name: name.trim(),
+        role: selectedRole,
+        phone: normPhone,
+        email: normEmail,
+        organization: organization.trim() || (selectedRole === 'farmer' ? 'Kisan Producer Group' : selectedRole === 'buyer' ? 'Biomass Enterprise' : 'Freight Transport'),
+        location: location.trim(),
+        coordinates: { lat: 30.3742, lng: 75.8712 },
+        password: password.trim(),
+      });
 
-    if (!result.success) {
-      setError(result.error);
-      return;
+      if (!result.success) {
+        inFlightRef.current = false;
+        setSubmitting(false);
+        setError(result.error);
+        return;
+      }
+
+      setSuccess(`Account created for ${result.user.name}! Redirecting to ${selectedRole} dashboard...`);
+      router.replace(`/${result.user.role}/dashboard`);
+    } catch {
+      inFlightRef.current = false;
+      setSubmitting(false);
+      setError('Unable to complete registration. Please try again.');
     }
-
-    setSuccess(`Account created for ${result.user.name}! Redirecting to ${selectedRole} dashboard...`);
-    setTimeout(() => {
-      router.push(`/${result.user.role}/dashboard`);
-    }, 350);
   };
 
   return (
@@ -102,10 +115,13 @@ export default function RegisterPage() {
             <Sprout className="w-6 h-6 text-white" />
           </Link>
           <h1 className="text-3xl font-extrabold text-charcoal tracking-tight">
-            Register for Straw<span className="text-moss">Sync</span>
+            {t('auth.registerTitle', 'Register for StrawSync')}
           </h1>
           <p className="text-xs text-charcoal-muted max-w-sm mx-auto">
-            Join India's agricultural residue liquidity network. Convert stubble liability into economic value.
+            {t(
+              'auth.registerSub',
+              "Join India's agricultural residue liquidity network. Convert stubble liability into economic value."
+            )}
           </p>
         </div>
 
@@ -113,12 +129,12 @@ export default function RegisterPage() {
         <div className="bg-white rounded-3xl p-8 border border-earth-border shadow-elevated">
           {/* Navigation to Login */}
           <div className="flex items-center justify-between pb-6 mb-6 border-b border-earth-border">
-            <span className="text-sm font-bold text-charcoal">Create Your Profile</span>
+            <span className="text-sm font-bold text-charcoal">{t('auth.createProfile', 'Create Your Profile')}</span>
             <Link
               href="/login"
               className="text-xs font-semibold text-forest hover:underline flex items-center gap-1"
             >
-              <span>Existing user? Sign In</span>
+              <span>{t('auth.existingUser', 'Existing user? Sign In')}</span>
               <ArrowRight className="w-3 h-3" />
             </Link>
           </div>
@@ -126,7 +142,7 @@ export default function RegisterPage() {
           {/* Role Selection: Farmer, Buyer, Logistics ONLY (No public Admin) */}
           <div className="mb-6">
             <label className="block text-xs font-bold text-charcoal uppercase mb-2">
-              Select Your Role:
+              {t('auth.selectRole', 'Select Your Role:')}
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <button
@@ -199,7 +215,7 @@ export default function RegisterPage() {
 
             <div>
               <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                Full Name / Farm or Company Name *
+                {t('auth.fullName', 'Full Name / Farm or Company Name *')}
               </label>
               <div className="relative">
                 <User className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -217,7 +233,7 @@ export default function RegisterPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                  Email Address
+                  {t('auth.emailAddress', 'Email Address')}
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -233,7 +249,7 @@ export default function RegisterPage() {
 
               <div>
                 <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                  10-Digit Mobile Number
+                  {t('auth.mobileNumber', '10-Digit Mobile Number')}
                 </label>
                 <div className="relative">
                   <Phone className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -251,7 +267,7 @@ export default function RegisterPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                  Password *
+                  {t('auth.password', 'Password')} *
                 </label>
                 <div className="relative">
                   <Lock className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -268,7 +284,7 @@ export default function RegisterPage() {
 
               <div>
                 <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                  Confirm Password *
+                  {t('auth.confirmPassword', 'Confirm Password *')}
                 </label>
                 <div className="relative">
                   <Lock className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -286,7 +302,7 @@ export default function RegisterPage() {
 
             <div>
               <label className="block text-xs font-bold text-charcoal-muted uppercase mb-1">
-                Primary District & State *
+                {t('auth.districtState', 'Primary District & State *')}
               </label>
               <div className="relative">
                 <MapPin className="w-4 h-4 absolute left-3.5 top-3 text-charcoal-muted" />
@@ -303,9 +319,10 @@ export default function RegisterPage() {
 
             <button
               type="submit"
-              className="w-full py-3 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold shadow-subtle flex items-center justify-center gap-2 transition"
+              disabled={submitting}
+              className="w-full py-3 bg-forest hover:bg-forest-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-subtle flex items-center justify-center gap-2 transition"
             >
-              <span>Complete Registration as {selectedRole.toUpperCase()}</span>
+              <span>{t('auth.completeRegister', 'Complete Registration')} ({selectedRole.toUpperCase()})</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

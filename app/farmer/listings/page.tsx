@@ -23,9 +23,11 @@ import {
   formatWeight,
   formatUnitPrice,
 } from '../../../lib/store';
+import { useLanguage } from '../../../lib/i18n';
 
 function FarmerListingsContent() {
   const searchParams = useSearchParams();
+  const { t } = useLanguage();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [listings, setListings] = useState<ResidueListing[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -86,7 +88,7 @@ function FarmerListingsContent() {
               </Link>
             </div>
             <h1 className="text-2xl font-bold text-charcoal mt-1">
-              {isAdminView ? 'All Farmer Crop Residue Listings' : 'My Crop Residue Listings'}
+              {isAdminView ? 'All Farmer Crop Residue Listings' : t('nav.myListings', 'My Crop Residue Listings')}
             </h1>
             <p className="text-xs text-charcoal-muted">
               Manage your farmgate biomass lots, track verification, and inspect liquidity estimates

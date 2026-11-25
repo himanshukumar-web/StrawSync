@@ -5,6 +5,7 @@ import { Wheat, ArrowRight, X } from 'lucide-react';
 import { ResidueListing } from '../types';
 import { StrawSyncStore, toTonnes, pricePerUnitToPerTonne, toAcres } from '../lib/store';
 import { CROP_COEFFICIENTS, estimateResidue } from '../lib/engine';
+import { useLanguage } from '../lib/i18n';
 import ResidueListingFields, {
   ResidueFormState,
   createInitialResidueState,
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export default function EditResidueModal({ isOpen, listing, onClose, onSuccess }: Props) {
+  const { t } = useLanguage();
   const [formState, setFormState] = useState<ResidueFormState>(() =>
     createInitialResidueState(listing)
   );
@@ -101,7 +103,7 @@ export default function EditResidueModal({ isOpen, listing, onClose, onSuccess }
             </div>
             <div>
               <h3 className="text-lg font-bold text-charcoal">
-                Edit Listing #{listing.id.slice(-6)}
+                {t('modal.editListing', 'Edit Listing')} #{listing.id.slice(-6)}
               </h3>
               <p className="text-xs text-charcoal-muted">
                 Update quantity, unit, farmgate price, photo, or location specs
@@ -182,13 +184,13 @@ export default function EditResidueModal({ isOpen, listing, onClose, onSuccess }
               onClick={onClose}
               className="px-4 py-2 rounded-xl text-charcoal-muted hover:bg-sand font-bold"
             >
-              Cancel
+              {t('modal.cancel', 'Cancel')}
             </button>
             <button
               type="submit"
               className="px-6 py-2.5 bg-forest hover:bg-forest-700 text-white rounded-xl font-bold shadow-subtle flex items-center gap-2"
             >
-              <span>Save Changes</span>
+              <span>{t('modal.saveChanges', 'Save Changes')}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

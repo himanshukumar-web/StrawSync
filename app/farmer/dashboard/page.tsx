@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import DashboardLayout from '../../../components/DashboardLayout';
 import AddResidueModal from '../../../components/AddResidueModal';
+import { useLanguage } from '../../../lib/i18n';
 import {
   ResidueListing,
   PurchaseOrder,
@@ -146,6 +147,8 @@ export default function FarmerDashboardPage() {
     setTimeout(() => setActionMsg(''), 4500);
   };
 
+  const { t } = useLanguage();
+
   return (
     <DashboardLayout role="farmer" title="Farmer Overview Dashboard">
       <div className="space-y-8">
@@ -160,7 +163,7 @@ export default function FarmerDashboardPage() {
                 <h1 className="text-2xl font-bold text-charcoal">
                   {isAdminView
                     ? 'Farmer Operations Hub — All Registered Farms'
-                    : `Kisan Dashboard — ${currentUser?.name || 'Farmer'}`}
+                    : `${t('farmer.kisanDashboard', 'Kisan Dashboard')} — ${currentUser?.name || t('role.farmer', 'Farmer')}`}
                 </h1>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
                   isAdminView
@@ -193,7 +196,7 @@ export default function FarmerDashboardPage() {
             className="px-5 py-3 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold shadow-subtle flex items-center justify-center gap-2 transition shrink-0"
           >
             <Plus className="w-4 h-4" />
-            <span>List New Residue Lot</span>
+            <span>{t('farmer.listNewLot', 'List New Residue Lot')}</span>
           </button>
         </div>
 
@@ -287,7 +290,7 @@ export default function FarmerDashboardPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-earth-border shadow-subtle">
             <div className="text-xs font-bold text-charcoal-muted uppercase flex items-center justify-between">
-              <span>Total Residue Registered</span>
+              <span>{t('farmer.totalRegistered', 'Total Residue Registered')}</span>
               <Scale className="w-4 h-4 text-forest" />
             </div>
             <div className="text-2xl font-extrabold text-charcoal mt-2">
@@ -301,7 +304,7 @@ export default function FarmerDashboardPage() {
 
           <div className="bg-white p-5 rounded-2xl border border-earth-border shadow-subtle">
             <div className="text-xs font-bold text-charcoal-muted uppercase flex items-center justify-between">
-              <span>Available for Pickup</span>
+              <span>{t('farmer.availablePickup', 'Available for Pickup')}</span>
               <Wheat className="w-4 h-4 text-emerald-600" />
             </div>
             <div className="text-2xl font-extrabold text-forest mt-2">
@@ -315,7 +318,7 @@ export default function FarmerDashboardPage() {
 
           <div className="bg-white p-5 rounded-2xl border border-earth-border shadow-subtle">
             <div className="text-xs font-bold text-charcoal-muted uppercase flex items-center justify-between">
-              <span>Total Sold Quantity</span>
+              <span>{t('farmer.totalSold', 'Total Sold Quantity')}</span>
               <CheckCircle2 className="w-4 h-4 text-blue-600" />
             </div>
             <div className="text-2xl font-extrabold text-blue-800 mt-2">
@@ -329,7 +332,7 @@ export default function FarmerDashboardPage() {
 
           <div className="bg-white p-5 rounded-2xl border border-earth-border shadow-subtle">
             <div className="text-xs font-bold text-charcoal-muted uppercase flex items-center justify-between">
-              <span>Active Dispatches</span>
+              <span>{t('farmer.activeDispatches', 'Active Dispatches')}</span>
               <Truck className="w-4 h-4 text-amber-600" />
             </div>
             <div className="text-2xl font-extrabold text-charcoal mt-2">
@@ -343,14 +346,14 @@ export default function FarmerDashboardPage() {
 
           <div className="p-5 rounded-2xl border border-forest-200 bg-forest-50/30 shadow-subtle">
             <div className="text-xs font-bold text-forest-800 uppercase flex items-center justify-between">
-              <span>Settled Earnings</span>
+              <span>{t('farmer.settledEarnings', 'Settled Earnings')}</span>
               <Coins className="w-4 h-4 text-forest" />
             </div>
             <div className="text-2xl font-extrabold text-forest mt-2">
               ₹{settledEarnings.toLocaleString('en-IN')}
             </div>
             <div className="text-[11px] text-forest-700 mt-1 font-semibold">
-              In Escrow: ₹{escrowEarnings.toLocaleString('en-IN')}
+              {t('farmer.inEscrow', 'In Escrow')}: ₹{escrowEarnings.toLocaleString('en-IN')}
             </div>
           </div>
         </div>
@@ -362,7 +365,7 @@ export default function FarmerDashboardPage() {
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full ${pendingRequests.length > 0 ? 'bg-forest animate-pulse' : 'bg-charcoal-muted/40'}`} />
                 <h2 className="text-lg font-bold text-forest-900">
-                  Incoming Purchase Requests from Buyers ({pendingRequests.length})
+                  {t('farmer.incomingRequests', 'Incoming Purchase Requests from Buyers')} ({pendingRequests.length})
                 </h2>
               </div>
               <p className="text-xs text-forest-700 mt-0.5">
@@ -423,13 +426,13 @@ export default function FarmerDashboardPage() {
                         onClick={() => handleRejectRequest(req.id, req.buyerName)}
                         className="px-3 py-1.5 rounded-xl border border-earth-border text-charcoal-muted hover:text-red-700 hover:bg-red-50 text-xs font-bold transition"
                       >
-                        Reject Request
+                        {t('farmer.rejectRequest', 'Reject Request')}
                       </button>
                       <button
                         onClick={() => handleAcceptRequest(req.id, req.buyerName)}
                         className="px-4 py-1.5 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold transition shadow-subtle"
                       >
-                        Accept Request
+                        {t('farmer.acceptRequest', 'Accept Request')}
                       </button>
                     </div>
                   </div>
@@ -444,7 +447,7 @@ export default function FarmerDashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-charcoal">
-                Recent Residue Listings
+                {t('farmer.recentListings', 'Recent Residue Listings')}
               </h2>
               <p className="text-xs text-charcoal-muted">
                 {isAdminView ? 'Platform-wide registered farmgate lots' : 'Your registered farmgate stubble lots on the exchange'}
@@ -454,7 +457,7 @@ export default function FarmerDashboardPage() {
               href="/farmer/listings"
               className="text-xs font-bold text-forest hover:underline flex items-center gap-1"
             >
-              <span>Manage All Listings ({farmerListings.length})</span>
+              <span>{t('farmer.manageAllListings', 'Manage All Listings')} ({farmerListings.length})</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
@@ -576,10 +579,13 @@ export default function FarmerDashboardPage() {
               </div>
               <div>
                 <h2 className="text-lg font-bold text-charcoal">
-                  Payment & Escrow Settlement
+                  {t('farmer.payoutHeading', 'Payment & Escrow Settlement')}
                 </h2>
                 <p className="text-xs text-charcoal-muted">
-                  Configure your UPI ID or Bank Account for instant escrow release upon plant delivery confirmation
+                  {t(
+                    'farmer.payoutSub',
+                    'Configure your UPI ID or Bank Account for instant escrow release upon plant delivery confirmation'
+                  )}
                 </p>
               </div>
             </div>
@@ -605,7 +611,7 @@ export default function FarmerDashboardPage() {
 
                 <div>
                   <label className="block text-[11px] font-bold text-charcoal-muted uppercase mb-1">
-                    Farmer UPI ID (Preferred Instant Payout)
+                    {t('farmer.upiLabel', 'Farmer UPI ID (Preferred Instant Payout)')}
                   </label>
                   <input
                     type="text"
@@ -619,7 +625,7 @@ export default function FarmerDashboardPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-bold text-charcoal-muted uppercase mb-1">
-                      Account Holder Name
+                      {t('farmer.accountHolder', 'Account Holder Name')}
                     </label>
                     <input
                       type="text"
@@ -631,7 +637,7 @@ export default function FarmerDashboardPage() {
                   </div>
                   <div>
                     <label className="block text-[11px] font-bold text-charcoal-muted uppercase mb-1">
-                      IFSC Code
+                      {t('farmer.ifscCode', 'IFSC Code')}
                     </label>
                     <input
                       type="text"
@@ -645,7 +651,7 @@ export default function FarmerDashboardPage() {
 
                 <div>
                   <label className="block text-[11px] font-bold text-charcoal-muted uppercase mb-1">
-                    Bank Account Number (NEFT / IMPS Fallback)
+                    {t('farmer.bankAccount', 'Bank Account Number (NEFT / IMPS Fallback)')}
                   </label>
                   <input
                     type="text"
@@ -660,14 +666,14 @@ export default function FarmerDashboardPage() {
                   type="submit"
                   className="px-5 py-2.5 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold shadow-subtle transition"
                 >
-                  Save Payout Details
+                  {t('farmer.savePayout', 'Save Payout Details')}
                 </button>
               </form>
             )}
 
             <div className={`${isAdminView ? 'lg:col-span-12' : 'lg:col-span-6'} space-y-3`}>
               <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-charcoal uppercase">Settled Payout & UTR Ledger</span>
+                <span className="font-bold text-charcoal uppercase">{t('farmer.settledLedger', 'Settled Payout & UTR Ledger')}</span>
                 <span className="text-charcoal-muted">{transactions.length} settled transactions</span>
               </div>
 

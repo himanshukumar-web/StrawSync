@@ -17,8 +17,10 @@ import DashboardLayout from '../../../components/DashboardLayout';
 import LiveOrderGpsTracker from '../../../components/LiveOrderGpsTracker';
 import { PurchaseOrder, UserProfile } from '../../../types';
 import { StrawSyncStore, formatWeight } from '../../../lib/store';
+import { useLanguage } from '../../../lib/i18n';
 
 export default function FarmerOrdersPage() {
+  const { t } = useLanguage();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [expandedGpsOrderId, setExpandedGpsOrderId] = useState<string | null>(null);
@@ -90,7 +92,7 @@ export default function FarmerOrdersPage() {
         <div className="bg-emerald-50/40 rounded-3xl p-6 border border-forest-200 shadow-subtle space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-forest-900">
-              Incoming Purchase Requests from Buyers ({pendingRequests.length})
+              {t('farmer.incomingRequests', 'Incoming Purchase Requests from Buyers')} ({pendingRequests.length})
             </h2>
           </div>
 
@@ -126,13 +128,13 @@ export default function FarmerOrdersPage() {
                       onClick={() => handleRejectRequest(req.id, req.buyerName)}
                       className="px-3 py-1.5 rounded-xl border border-earth-border text-charcoal-muted hover:text-red-700 hover:bg-red-50 text-xs font-bold transition"
                     >
-                      Reject Request
+                      {t('farmer.rejectRequest', 'Reject Request')}
                     </button>
                     <button
                       onClick={() => handleAcceptRequest(req.id, req.buyerName)}
                       className="px-4 py-1.5 bg-forest hover:bg-forest-700 text-white rounded-xl text-xs font-bold transition shadow-subtle"
                     >
-                      Accept Request
+                      {t('farmer.acceptRequest', 'Accept Request')}
                     </button>
                   </div>
                 </div>
